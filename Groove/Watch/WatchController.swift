@@ -1,0 +1,319 @@
+import Foundation
+import CoreMotion
+import HealthKit
+import WatchConnectivity
+#if os(watchOS)
+import WatchKit
+#endif
+
+/// Watch orchestration. The detector lives here because latency matters:
+/// takeaway → phone → mic open has to finish inside the backswing.
+@MainActor
+final class WatchController: NSObject, ObservableObject {
+
+    @Published var state: DetectorState = .watching
+    @Published var struckCount = 0
+    @Published var rehearsalCount = 0
+    @Published var lastTempo: Double = 0
+    @Published var armConfidence: Double = 0
+    @Published var plateauCount = 0
+    @Published var isRunning = false
+    @Published var status = "Ready"
+    @Published var phoneConfigured = false
+    /// Published so the UI actually re-renders when the phone comes and goes.
+    /// A bare computed property had no publisher behind it.
+    @Published var phoneReady = false
+    @Published var unsentSwings = 0
+
+    private let motion = CMMotionManager()
+    private let healthStore = HKHealthStore()
+    private let detector = RoutineDetector()
+    private let spool = SwingSpool()
+    private var workout: HKWorkoutSession?
+    private var builder: HKLiveWorkoutBuilder?
+    private var t0 = Date()
+    private var sessionID = UUID()
+
+    private let queue: OperationQueue = {
+        let q = OperationQueue(); q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .userInteractive; return q
+    }()
+
+    override init() {
+        super.init()
+        detector.delegate = self
+        if WCSession.isSupported() {
+            WCSession.default.delegate = self
+            WCSession.default.activate()
+        }
+    }
+
+    /// Shown on the watch face when something structural is stopping a session.
+    @Published var blocker: String?
+
+    func requestAuthorization() async {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            blocker = "This watch can't run sessions."
+            return
+        }
+        let share: Set = [HKQuantityType.workoutType()]
+        let read: Set<HKObjectType> = [HKQuantityType.workoutType(), HKQuantityType(.heartRate)]
+        do {
+            try await healthStore.requestAuthorization(toShare: share, read: read)
+        } catch {
+            // A denial here means no workout session, which means CoreMotion
+            // stops the moment the screen sleeps. Say so instead of failing later.
+            blocker = "Allow Workouts in Settings — sensors stop without it."
+            return
+        }
+        if healthStore.authorizationStatus(for: HKQuantityType.workoutType()) == .sharingDenied {
+            blocker = "Allow Workouts in Settings — sensors stop without it."
+        } else {
+            blocker = nil
+        }
+    }
+
+    /// Applied whenever the phone pushes new settings, mid-session included.
+    func apply(_ config: Config) {
+        detector.config = config
+        config.save()               // local cache for a cold start with no phone
+        phoneConfigured = true
+    }
+
+    private func refreshReachability() {
+        let s = WCSession.default
+        phoneReady = s.activationState == .activated && s.isReachable
+    }
+
+    // MARK: Session
+
+    func start() {
+        guard !isRunning else { return }
+        do {
+            // Not for fitness data — this is the only supported way to hold
+            // CoreMotion at 100 Hz with the screen off on watchOS.
+            let config = HKWorkoutConfiguration()
+            config.activityType = .golf
+            config.locationType = .outdoor
+            let session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
+            let builder = session.associatedWorkoutBuilder()
+            builder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore,
+                                                         workoutConfiguration: config)
+            session.delegate = self
+            let now = Date()
+            session.startActivity(with: now)
+            builder.beginCollection(withStart: now) { _, _ in }
+            self.workout = session; self.builder = builder
+
+            // Prefer the phone's config over our local copy — UserDefaults do
+            // not cross devices, so the local one is almost certainly defaults.
+            detector.config = ConfigSync.currentFromPhone() ?? Config.load()
+            detector.reset()
+            t0 = Date()
+            sessionID = UUID()
+            struckCount = 0
+            rehearsalCount = 0
+            lastTempo = 0
+            plateauCount = 0
+
+            motion.deviceMotionUpdateInterval = 1.0 / SwingAnalyzer.fs
+            motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: queue) { [weak self] dm, _ in
+                guard let self, let dm else { return }
+                let frame = MotionFrame(
+                    t: Date().timeIntervalSince(self.t0),
+                    accel: SIMD3(dm.userAcceleration.x, dm.userAcceleration.y, dm.userAcceleration.z),
+                    rotation: SIMD3(dm.rotationRate.x, dm.rotationRate.y, dm.rotationRate.z),
+                    gravity: SIMD3(dm.gravity.x, dm.gravity.y, dm.gravity.z))
+                Task { @MainActor in self.detector.ingest(frame) }
+            }
+            isRunning = true
+            status = "Watching"
+            // The watch owns the session. The phone mirrors this, never the reverse —
+            // it's in a back pocket and can't be the control surface.
+            send(["event": "sessionStart", "sessionID": sessionID.uuidString])
+        } catch {
+            status = "Start failed: \(error.localizedDescription)"
+        }
+    }
+
+    func stop() {
+        motion.stopDeviceMotionUpdates()
+        let end = Date()
+        builder?.endCollection(withEnd: end) { [weak self] _, _ in
+            self?.builder?.finishWorkout { _, _ in }
+        }
+        workout?.end(); workout = nil
+        isRunning = false
+        state = .watching
+        status = "Ended"
+        send(["event": "sessionEnd"])
+    }
+
+    // MARK: Phone link
+
+    /// Swings are held on the watch until the phone confirms delivery. Before
+    /// this, a permanently failed transfer just lost them.
+    func flushSpool() {
+        let session = WCSession.default
+        guard session.activationState == .activated else { return }
+        for swing in spool.pending() {
+            guard let data = try? JSONEncoder().encode(swing) else {
+                spool.remove(swing.id); continue
+            }
+            session.transferUserInfo(["swing": data, "swingID": swing.id.uuidString])
+        }
+    }
+
+    func acknowledge(_ id: UUID) {
+        spool.remove(id)
+        unsentSwings = spool.count
+    }
+
+    private func send(_ payload: [String: Any]) {
+        let s = WCSession.default
+        guard s.activationState == .activated else { return }
+        if s.isReachable {
+            s.sendMessage(payload, replyHandler: nil) { _ in
+                s.transferUserInfo(payload)     // queue it if the live path fails
+            }
+        } else {
+            s.transferUserInfo(payload)
+        }
+    }
+}
+
+// MARK: - Detector delegate
+
+extension WatchController: RoutineDetectorDelegate {
+    func detectorDidArm(confidence: Double) {
+        state = .armed
+        armConfidence = confidence
+        // Arming early gives the phone time to open the record session before
+        // the duck is actually needed.
+        send(["event": "arm", "confidence": confidence])
+        // The only haptic you feel before a shot, and it lands while you're
+        // still — never mid-motion.
+        Haptic.arm()
+    }
+
+    func detectorDidDisarm() {
+        state = .watching
+        send(["event": "disarm"])
+    }
+
+    func detectorDidFireTakeaway(confidence: Double) {
+        state = .swinging
+        send(["event": "takeaway", "confidence": confidence])
+        // Deliberately silent. Buzzing a player's wrist at the instant their
+        // backswing starts is the worst possible moment to interrupt them.
+    }
+
+    func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) {
+        state = .recovering
+
+        // Only tell the phone to touch audio if this swing actually armed it.
+        // An unarmed swing is still logged — capture is independent of arming.
+        if swing.struck {
+            struckCount += 1
+            lastTempo = swing.metrics.tempoRatio
+            if wasArmed { send(["event": "impact"]) }
+            // Confirms the swing logged, so he never has to look at the watch.
+            Haptic.captured()
+        } else {
+            rehearsalCount += 1
+            if wasArmed { send(["event": "restore"]) }   // no ball — audio back now
+        }
+        plateauCount = swing.routine.plateauCount
+
+        var stamped = swing
+        stamped.sessionID = sessionID
+        spool.enqueue(stamped)
+        flushSpool()
+        unsentSwings = spool.count
+    }
+}
+
+// MARK: - Delegates
+
+extension WatchController: HKWorkoutSessionDelegate {
+    nonisolated func workoutSession(_ s: HKWorkoutSession, didChangeTo: HKWorkoutSessionState,
+                                    from: HKWorkoutSessionState, date: Date) {}
+    nonisolated func workoutSession(_ s: HKWorkoutSession, didFailWithError error: Error) {
+        Task { @MainActor in self.status = "Workout error: \(error.localizedDescription)" }
+    }
+}
+
+extension WatchController: WCSessionDelegate {
+    nonisolated func session(_ s: WCSession, activationDidCompleteWith state: WCSessionActivationState,
+                             error: Error?) {
+        Task { @MainActor in
+            self.refreshReachability()
+            self.unsentSwings = self.spool.count
+            self.flushSpool()
+        }
+        if let config = ConfigSync.decode(s.receivedApplicationContext) {
+            Task { @MainActor in self.apply(config) }
+        }
+    }
+
+    nonisolated func session(_ s: WCSession, didReceiveApplicationContext context: [String: Any]) {
+        guard let config = ConfigSync.decode(context) else { return }
+        Task { @MainActor in self.apply(config) }
+    }
+
+    nonisolated func sessionReachabilityDidChange(_ s: WCSession) {
+        Task { @MainActor in
+            self.refreshReachability()
+            if s.isReachable { self.flushSpool() }   // catch up on anything stranded
+        }
+    }
+
+    /// Phone confirms receipt so the spool can drop it.
+    nonisolated func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
+        guard let raw = message["ack"] as? String, let id = UUID(uuidString: raw) else { return }
+        Task { @MainActor in self.acknowledge(id) }
+    }
+}
+
+/// Two haptic moments, both outside the swing itself.
+enum Haptic {
+    /// You're set and it's watching. Fires while you're still.
+    static func arm() {
+        #if os(watchOS)
+        WKInterfaceDevice.current().play(.start)
+        #endif
+    }
+    /// Swing logged. Fires after you've finished, so you never check the watch.
+    static func captured() {
+        #if os(watchOS)
+        WKInterfaceDevice.current().play(.success)
+        #endif
+    }
+}
+
+
+// MARK: - Spool
+
+/// Durable queue of swings not yet confirmed by the phone. Survives app relaunch,
+/// so a lost or delayed transfer never costs a rep.
+final class SwingSpool {
+    private let key = "groove.spool"
+
+    private var items: [Swing] {
+        get {
+            guard let d = UserDefaults.standard.data(forKey: key),
+                  let s = try? JSONDecoder().decode([Swing].self, from: d) else { return [] }
+            return s
+        }
+        set {
+            if let d = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(d, forKey: key)
+            }
+        }
+    }
+
+    var count: Int { items.count }
+    func pending() -> [Swing] { items }
+    func enqueue(_ swing: Swing) { items.append(swing) }
+    func remove(_ id: UUID) { items.removeAll { $0.id == id } }
+}

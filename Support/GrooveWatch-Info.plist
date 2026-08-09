@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Groove</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+
+	<!-- Single-target watchOS app (watchOS 7+). Without WKApplication and the
+	     companion identifier the app builds clean and then fails to install. -->
+	<key>WKApplication</key>
+	<true/>
+	<key>WKCompanionAppBundleIdentifier</key>
+	<string>com.connor.groove</string>
+
+	<!-- watchOS uses WKBackgroundModes, NOT UIBackgroundModes. The HKWorkoutSession
+	     is what holds CoreMotion at 100 Hz with the screen off. -->
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>workout-processing</string>
+	</array>
+
+	<key>NSMotionUsageDescription</key>
+	<string>Reads your swing from your wrist.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Keeps sensors running for the length of a session.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Saves a workout while recording.</string>
+</dict>
+</plist>
