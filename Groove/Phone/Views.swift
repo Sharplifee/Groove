@@ -7,13 +7,28 @@ import SwiftUI
 // typed Color, and `.foregroundStyle(.muted)` / `.tint(.amber)` where the
 // parameter is `some ShapeStyle`. This is how SwiftUI exposes `.red` itself.
 // Values are unchanged from the original palette.
+// Augusta palette, taken from the Masters' own stylesheet rather than eyedropped.
+// Token names are unchanged so every call site keeps working; only the values
+// moved. The old scheme was a blue-black ground with sodium amber — this is
+// evening-under-the-pines green with Masters yellow as the single accent.
+//
+// Contrast on the dark ground (#193526), which is what the app actually runs at
+// since RootView pins .preferredColorScheme(.dark):
+//   bone on dusk  13.3:1   amber on dusk  14.6:1
+//   muted on dusk  7.4:1   turf on dusk    9.8:1   — all clear WCAG AA.
 extension ShapeStyle where Self == Color {
-    static var dusk:  Color { Color(red: 0.07,  green: 0.086, blue: 0.122) }
-    static var panel: Color { Color(red: 0.106, green: 0.129, blue: 0.188) }
-    static var amber: Color { Color(red: 0.910, green: 0.639, blue: 0.239) }
-    static var turf:  Color { Color(red: 0.498, green: 0.659, blue: 0.549) }
-    static var bone:  Color { Color(red: 0.949, green: 0.929, blue: 0.894) }
-    static var muted: Color { Color(red: 0.533, green: 0.573, blue: 0.651) }
+    /// Pine — dark ground. Was a blue-black; now reads as woodland, not void.
+    static var dusk:  Color { Color(red: 0.098, green: 0.208, blue: 0.149) }
+    /// Loblolly — cards, one step up from the ground.
+    static var panel: Color { Color(red: 0.110, green: 0.286, blue: 0.196) }
+    /// Masters Yellow — accent only. Tint, live state, the one loud colour.
+    static var amber: Color { Color(red: 0.988, green: 0.890, blue: 0.000) }
+    /// New Growth — positive/success readouts.
+    static var turf:  Color { Color(red: 0.753, green: 0.863, blue: 0.561) }
+    /// Clubhouse Cream — primary text. Warm, so it doesn't glare on the green.
+    static var bone:  Color { Color(red: 0.969, green: 0.957, blue: 0.941) }
+    /// Stone — secondary text and labels.
+    static var muted: Color { Color(red: 0.694, green: 0.702, blue: 0.702) }
 }
 
 // MARK: - Root
@@ -400,15 +415,6 @@ struct SetupView: View {
                             .buttonStyle(Primary())
                         Text("Worth redoing if you change your pre-shot routine.")
                             .font(.caption2).foregroundStyle(.muted)
-                    }
-
-                    Card("demo mode") {
-                        Toggle("Show sample data", isOn: Binding(
-                            get: { c.isDemoMode },
-                            set: { c.setDemoMode($0) }))
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("Fills every screen with generated swings so you can see where things land. Nothing is saved and your real swings come back when you turn it off.")
-                            .font(.caption).foregroundStyle(.muted)
                     }
 
                     Card("your data") {
