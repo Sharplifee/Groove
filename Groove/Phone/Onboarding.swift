@@ -67,7 +67,7 @@ struct OnboardingView: View {
 
                 if c.config.pocket == .none {
                     Text("Without the phone on you, we can't tell whether your hips lead your hands. Everything else still works.")
-                        .font(.footnote).foregroundStyle(.amber)
+                        .font(.footnote).foregroundStyle(.alert)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -129,7 +129,7 @@ struct OnboardingView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(result.isReady ? "Ready" : "Not there yet")
                             .font(.system(size: 15, weight: .heavy, design: .rounded))
-                            .foregroundStyle(result.isReady ? Color.turf : Color.amber)
+                            .foregroundStyle(result.isReady ? Color.turf : Color.alert)
                         Text(result.verdict).font(.footnote).foregroundStyle(.muted)
                         SeparationBar(real: result.meanRealConfidence,
                                       rehearsal: result.meanRehearsalConfidence)
@@ -198,7 +198,7 @@ struct ProgressDots: View {
         HStack(spacing: 6) {
             ForEach(0..<count, id: \.self) { i in
                 Capsule()
-                    .fill(i == current ? Color.amber : Color.muted.opacity(0.3))
+                    .fill(i == current ? Color.turf : Color.muted.opacity(0.3))
                     .frame(width: i == current ? 20 : 6, height: 6)
                     .animation(.snappy, value: current)
             }

@@ -1,67 +1,43 @@
 import SwiftUI
 
-// MARK: - Palette (matches the mockup)
-
-// Declared on the ShapeStyle-constrained extension rather than on Color directly
-// so that implicit member lookup works in both positions: `Color.dusk` for a
-// typed Color, and `.foregroundStyle(.muted)` / `.tint(.amber)` where the
-// parameter is `some ShapeStyle`. This is how SwiftUI exposes `.red` itself.
-// Values are unchanged from the original palette.
-// Augusta palette, taken from the Masters' own stylesheet rather than eyedropped.
-// Token names are unchanged so every call site keeps working; only the values
-// moved. The old scheme was a blue-black ground with sodium amber — this is
-// evening-under-the-pines green with Masters yellow as the single accent.
-//
-// Contrast on the dark ground (#193526), which is what the app actually runs at
-// since RootView pins .preferredColorScheme(.dark):
-//   bone on dusk  13.3:1   amber on dusk  14.6:1
-//   muted on dusk  7.4:1   turf on dusk    9.8:1   — all clear WCAG AA.
-extension ShapeStyle where Self == Color {
-    /// Pine — dark ground. Was a blue-black; now reads as woodland, not void.
-    static var dusk:  Color { Color(red: 0.098, green: 0.208, blue: 0.149) }
-    /// Loblolly — cards, one step up from the ground.
-    static var panel: Color { Color(red: 0.110, green: 0.286, blue: 0.196) }
-    /// Masters Yellow — accent only. Tint, live state, the one loud colour.
-    static var amber: Color { Color(red: 0.988, green: 0.890, blue: 0.000) }
-    /// New Growth — positive/success readouts.
-    static var turf:  Color { Color(red: 0.753, green: 0.863, blue: 0.561) }
-    /// Clubhouse Cream — primary text. Warm, so it doesn't glare on the green.
-    static var bone:  Color { Color(red: 0.969, green: 0.957, blue: 0.941) }
-    /// Stone — secondary text and labels.
-    static var muted: Color { Color(red: 0.694, green: 0.702, blue: 0.702) }
-
-    /// Augusta Green — filled buttons and active state. Deliberately quieter than
-    /// the old yellow: at 1.9:1 against the pine ground the fill recedes, which is
-    /// the point — yellow now only appears when something is actually happening.
-    /// Bone text on it is 6.9:1, so the label itself stays fully legible.
-    static var fairway: Color { Color(red: 0.000, green: 0.404, blue: 0.278) }
-    /// Crimson — destructive fills only. Replaces system red, which was louder
-    /// than anything else on screen.
-    static var crimson: Color { Color(red: 0.729, green: 0.047, blue: 0.184) }
-}
+// The palette moved to Theme.swift so it can change at runtime. The
+// ShapeStyle-extension trick that makes both `Color.dusk` and
+// `.foregroundStyle(.muted)` resolve is documented there.
 
 // MARK: - Root
 
 struct RootView: View {
     @StateObject private var c = PhoneController()
 
+    /// Tab selection lives here, on the parent, so it survives the `.id()` below
+    /// rebuilding the tab tree — otherwise changing theme in Setup would bounce
+    /// you back to Range.
+    @State private var tab = 0
+
     var body: some View {
         Group {
             if !c.config.hasOnboarded {
                 OnboardingView(c: c)
             } else {
-                TabView {
+                TabView(selection: $tab) {
                     RangeView(c: c).tabItem { Label("Range", systemImage: "flag.circle") }
+                        .tag(0)
                     ProfileView(c: c).tabItem { Label("Profile", systemImage: "chart.xyaxis.line") }
+                        .tag(1)
                     SetupView(c: c).tabItem { Label("Setup", systemImage: "slider.horizontal.3") }
+                        .tag(2)
                 }
             }
         }
-        // Tab bar and inline buttons take New Growth, not Augusta Green: a dark
-        // green on the pine ground is 1.9:1 and effectively invisible, whereas
-        // this reads 8.8:1. Green still means "interactive", amber stays reserved.
+        // The palette is read through computed statics, which SwiftUI can't see as
+        // a dependency — so switching theme has to force the subtree to re-render.
+        // Safe here: the live session lives in `c`, a StateObject owned by this
+        // view, so nothing session-scoped is torn down.
+        .id(c.theme)
+        // Interactive elements take turf — New Growth on pine (8.8:1), Augusta
+        // Green on cream (6.3:1). Amber stays reserved for live state.
         .tint(.turf)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(c.theme.colorScheme)
         .overlay(alignment: .bottom) {
             if let deleted = c.recentlyDeleted { UndoToast(c: c, swing: deleted) }
         }
@@ -112,7 +88,7 @@ struct RangeView: View {
                         Bullet("It holds a silent audio session while you're out there — that's what stops iOS suspending it in your pocket.")
                         if c.routeUnavailable {
                             Text("No earbuds connected — it'll fall back to the phone mic, which is muffled in a pocket.")
-                                .font(.footnote).foregroundStyle(.amber)
+                                .font(.footnote).foregroundStyle(.alert)
                         }
                         if c.config.hasCalibrated && c.config.gateUntilFirstImpact {
                             Text("Your first shot of a session won't duck — it waits until it's seen one real strike.")
@@ -124,7 +100,7 @@ struct RangeView: View {
                         KV("audio in", c.inputName)
                         KV("input delay", String(format: "%.0f ms", c.measuredLatency * 1000))
                         KV("ducking", c.config.hasCalibrated ? "on" : "off — not calibrated",
-                           tint: c.config.hasCalibrated ? .turf : .amber)
+                           tint: c.config.hasCalibrated ? .turf : .alert)
                         if !c.config.hasCalibrated {
                             Text("Teach it your routine in Setup to turn ducking on.")
                                 .font(.caption2).foregroundStyle(.muted)
@@ -135,6 +111,7 @@ struct RangeView: View {
             }
             .background(Color.dusk)
             .navigationTitle("Range")
+            .themedNavBar()
             .task {
                 c.permissions.refresh()
                 if c.permissions.microphone == .unknown { await c.permissions.requestAll() }
@@ -145,7 +122,7 @@ struct RangeView: View {
     private var readyBanner: some View {
         VStack(spacing: 8) {
             Image(systemName: "applewatch")
-                .font(.system(size: 34)).foregroundStyle(.amber)
+                .font(.system(size: 34)).foregroundStyle(.turf)
             Text("Start from your watch")
                 .font(.system(size: 19, weight: .heavy, design: .rounded))
             Text("Then pocket this phone.")
@@ -158,7 +135,7 @@ struct RangeView: View {
     private var liveBanner: some View {
         VStack(spacing: 8) {
             HStack(spacing: 7) {
-                Circle().fill(Color.amber).frame(width: 9, height: 9)
+                Circle().fill(Color.alert).frame(width: 9, height: 9)
                 Text("Session running").font(.system(size: 17, weight: .heavy, design: .rounded))
             }
             Text("\(c.summary.struckSwings.count) swings so far")
@@ -226,6 +203,7 @@ struct ProfileView: View {
             }
             .background(Color.dusk)
             .navigationTitle("Profile")
+            .themedNavBar()
             .confirmationDialog("Remove this swing?",
                                 isPresented: .init(get: { confirmDelete != nil },
                                                    set: { if !$0 { confirmDelete = nil } }),
@@ -319,7 +297,7 @@ struct EnsembleChart: View {
                                 i == 0 ? p.move(to: .init(x: x(i), y: y(v)))
                                        : p.addLine(to: .init(x: x(i), y: y(v)))
                             }
-                        }.stroke(Color.amber.opacity(0.13), lineWidth: 1)
+                        }.stroke(Color.trace.opacity(0.13), lineWidth: 1)
                     }
 
                     Path { p in
@@ -331,14 +309,14 @@ struct EnsembleChart: View {
                             p.addLine(to: .init(x: x(i), y: y(e.high[i])))
                         }
                         p.closeSubpath()
-                    }.fill(Color.amber.opacity(0.18))
+                    }.fill(Color.trace.opacity(0.18))
 
                     Path { p in
                         for (i, v) in e.median.enumerated() {
                             i == 0 ? p.move(to: .init(x: x(i), y: y(v)))
                                    : p.addLine(to: .init(x: x(i), y: y(v)))
                         }
-                    }.stroke(Color.amber, lineWidth: 2.2)
+                    }.stroke(Color.trace, lineWidth: 2.2)
 
                     let ix = geo.size.width * SwingAnalyzer.tracePre
                         / (SwingAnalyzer.tracePre + SwingAnalyzer.tracePost)
@@ -418,7 +396,7 @@ struct SetupView: View {
 
                     Card("routine") {
                         KV("calibrated", c.config.hasCalibrated ? "yes" : "no",
-                           tint: c.config.hasCalibrated ? .turf : .amber)
+                           tint: c.config.hasCalibrated ? .turf : .alert)
                         if let r = c.calibrationResult {
                             SeparationBar(real: r.meanRealConfidence,
                                           rehearsal: r.meanRehearsalConfidence)
@@ -429,13 +407,24 @@ struct SetupView: View {
                             .font(.caption2).foregroundStyle(.muted)
                     }
 
+                    Card("appearance") {
+                        Picker("Theme", selection: Binding(
+                            get: { c.theme },
+                            set: { c.theme = $0 })) {
+                                ForEach(Theme.allCases) { Text($0.label).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                        Text(c.theme.blurb)
+                            .font(.caption).foregroundStyle(.muted)
+                    }
+
                     Card("your data") {
                         KV("swings stored", "\(c.swings.count)")
                         if let url = c.exportURL() {
                             ShareLink(item: url) {
                                 Text("Export everything")
                                     .font(.system(size: 15, weight: .heavy, design: .rounded))
-                                    .foregroundStyle(Color.bone)
+                                    .foregroundStyle(Color.cream)
                                     .frame(maxWidth: .infinity).padding(13)
                                     .background(Color.fairway, in: RoundedRectangle(cornerRadius: 12))
                             }
@@ -454,6 +443,7 @@ struct SetupView: View {
             }
             .background(Color.dusk)
             .navigationTitle("Setup")
+            .themedNavBar()
         }
     }
 }
@@ -487,7 +477,7 @@ struct DemoBanner: View {
             Text("Sample data — not your swings")
                 .font(.system(size: 11, design: .monospaced))
         }
-        .foregroundStyle(Color.dusk)
+        .foregroundStyle(Color.ink)
         .frame(maxWidth: .infinity).padding(.vertical, 8)
         .background(Color.amber, in: RoundedRectangle(cornerRadius: 10))
     }
@@ -549,7 +539,7 @@ struct Primary: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 15, weight: .heavy, design: .rounded))
-            .foregroundStyle(Color.bone)
+            .foregroundStyle(Color.cream)
             .frame(maxWidth: .infinity).padding(13)
             .background(destructive ? Color.crimson : Color.fairway,
                         in: RoundedRectangle(cornerRadius: 12))

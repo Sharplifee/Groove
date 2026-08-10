@@ -85,7 +85,7 @@ struct PermissionRow: View {
             }
             Spacer()
             if state == .denied, let onFix {
-                Button("Fix", action: onFix).font(.caption.bold()).tint(.amber)
+                Button("Fix", action: onFix).font(.caption.bold()).tint(.alert)
             }
         }
         .padding(.vertical, 4)
@@ -102,7 +102,7 @@ struct PermissionRow: View {
     private var tint: Color {
         switch state {
         case .granted: return .turf
-        case .denied:  return .amber
+        case .denied:  return .alert
         default:       return .muted
         }
     }

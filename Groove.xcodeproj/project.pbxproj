@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		15DCDA0DF17598C39A012D9D /* WatchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C4D184CDFBDACB32E5B79EB /* WatchController.swift */; };
+		1E358D503674B0FE8AACBD20 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3007C398D6AF8897079D6969 /* Theme.swift */; };
 		3A660F1ED650F7F969ABB579 /* AudioHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FCF9F82558B8284B40AE61E /* AudioHost.swift */; };
 		4EE6BC93110C27606F2D8C01 /* Permissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDEE075BB93A5C42DFFF8477 /* Permissions.swift */; };
 		50CBD092F1A56EB7EC04C715 /* ConfigSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA7130FEB15167D190BBCD7A /* ConfigSync.swift */; };
@@ -57,6 +58,7 @@
 		18A7755E15FE38DBA2F3C30C /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
 		1C4D184CDFBDACB32E5B79EB /* WatchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchController.swift; sourceTree = "<group>"; };
 		20434F865612EA69881A6B87 /* DemoData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoData.swift; sourceTree = "<group>"; };
+		3007C398D6AF8897079D6969 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		415BD591D32B91EC7E5C0C0A /* Groove.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Groove.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4D43BA5F9493A425F51404AC /* PhoneController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneController.swift; sourceTree = "<group>"; };
 		6FCF9F82558B8284B40AE61E /* AudioHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioHost.swift; sourceTree = "<group>"; };
@@ -88,6 +90,7 @@
 				F423F8CEE886427D6F10CD8C /* Onboarding.swift */,
 				EDEE075BB93A5C42DFFF8477 /* Permissions.swift */,
 				4D43BA5F9493A425F51404AC /* PhoneController.swift */,
+				3007C398D6AF8897079D6969 /* Theme.swift */,
 				18A7755E15FE38DBA2F3C30C /* Views.swift */,
 			);
 			path = Phone;
@@ -258,6 +261,7 @@
 				C1D18D7DA5D47482FB4ACBF5 /* PhoneController.swift in Sources */,
 				D54267C81D26F30561B66201 /* RoutineDetector.swift in Sources */,
 				59C981A54674DF23F0CBB87C /* SwingAnalyzer.swift in Sources */,
+				1E358D503674B0FE8AACBD20 /* Theme.swift in Sources */,
 				FB000E16F953BADB2ECFD2C6 /* Views.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

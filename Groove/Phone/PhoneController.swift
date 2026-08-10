@@ -30,9 +30,19 @@ final class PhoneController: NSObject, ObservableObject {
     let permissions = Permissions()
 
     /// Demo mode shows generated swings on every screen so the layout can be
-    /// seen populated without hitting balls. Held in memory only.
+    /// seen populated without hitting balls. Held in memory only. No longer
+    /// reachable from the UI — kept because the #Previews in DemoData depend on it.
     @Published var isDemoMode = false
     var realSwingsBackup: [Swing]?
+
+    /// Appearance. Phone-local and deliberately outside `Config`, so changing it
+    /// never pushes a new application context to the watch. See Theme.swift.
+    @Published var theme: Theme = .stored {
+        didSet {
+            Palette.theme = theme
+            Theme.store(theme)
+        }
+    }
 
     /// Preview/demo constructor — no WCSession, no audio, no motion.
     static func preview(swings: [Swing]) -> PhoneController {
