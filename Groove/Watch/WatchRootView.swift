@@ -101,3 +101,87 @@ struct WatchRootView: View {
 struct GrooveWatchApp: App {
     var body: some Scene { WindowGroup { WatchRootView() } }
 }
+
+// MARK: - Previews
+//
+// The watch is the only live surface, so these three are what actually matters
+// to look at — the phone screens are all read-after-the-fact.
+
+#Preview("Watching") { WatchPreview(state: .watching, running: true) }
+#Preview("Set") { WatchPreview(state: .armed, running: true) }
+#Preview("Swing — audio ducked") { WatchPreview(state: .swinging, running: true) }
+#Preview("Idle — not started") { WatchPreview(state: .watching, running: false) }
+#Preview("Phone unreachable") { WatchPreview(state: .watching, running: true, phone: false) }
+
+/// Mirrors WatchRootView's layout against fixed values, so each state can be
+/// inspected without a paired device or a live session.
+struct WatchPreview: View {
+    let state: DetectorState
+    var running = true
+    var phone = true
+    var unsent = 0
+
+    private var accent: Color {
+        switch state {
+        case .armed: return .green
+        case .swinging, .recovering: return .orange
+        default: return .secondary
+        }
+    }
+    private var label: String {
+        switch state {
+        case .watching, .settling: return "WATCHING"
+        case .armed: return "SET"
+        case .swinging: return "SWING"
+        case .recovering: return "…"
+        }
+    }
+    private var sub: String {
+        switch state {
+        case .armed: return "routine matched · 0.91"
+        case .swinging: return "audio ducked"
+        case .recovering: return "logging"
+        default: return running ? "audio untouched" : "not running"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("GROOVE").font(.system(size: 14, weight: .heavy, design: .rounded))
+                Spacer()
+                if running { Circle().fill(accent).frame(width: 7, height: 7) }
+            }
+            Text(label).font(.system(size: 17, weight: .heavy, design: .rounded))
+                .foregroundStyle(accent)
+            Text(sub).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            if running && !phone {
+                Text("Open Groove on your phone")
+                    .font(.system(size: 10)).foregroundStyle(.orange)
+            }
+            if unsent > 0 {
+                Text("\(unsent) waiting to sync")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            HStack {
+                stat("swings", "24")
+                Spacer()
+                stat("tempo", "3.0")
+            }
+            Text("41 rehearsals").font(.system(size: 9)).foregroundStyle(.secondary)
+            Button { } label: {
+                Text(running ? "End" : "Start").frame(maxWidth: .infinity)
+            }
+            .tint(running ? .red : .green)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func stat(_ k: String, _ v: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(k).font(.system(size: 9)).foregroundStyle(.secondary)
+            Text(v).font(.system(size: 17, weight: .bold, design: .rounded))
+        }
+    }
+}

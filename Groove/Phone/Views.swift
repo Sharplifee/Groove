@@ -55,6 +55,7 @@ struct RangeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
+                    if c.isDemoMode { DemoBanner() }
                     if c.isSessionLive { liveBanner } else { readyBanner }
 
                     if c.isSessionLive {
@@ -151,6 +152,7 @@ struct ProfileView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
+                    if c.isDemoMode { DemoBanner() }
                     if c.summary.struckSwings.count < 2 {
                         EmptyState(icon: "chart.xyaxis.line",
                                    title: "Nothing to compare yet",
@@ -400,6 +402,15 @@ struct SetupView: View {
                             .font(.caption2).foregroundStyle(.muted)
                     }
 
+                    Card("demo mode") {
+                        Toggle("Show sample data", isOn: Binding(
+                            get: { c.isDemoMode },
+                            set: { c.setDemoMode($0) }))
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Fills every screen with generated swings so you can see where things land. Nothing is saved and your real swings come back when you turn it off.")
+                            .font(.caption).foregroundStyle(.muted)
+                    }
+
                     Card("your data") {
                         KV("swings stored", "\(c.swings.count)")
                         if let url = c.exportURL() {
@@ -447,6 +458,20 @@ struct Card<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Color.panel, in: RoundedRectangle(cornerRadius: 15))
+    }
+}
+
+/// Sample data must never be mistaken for a real session.
+struct DemoBanner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye").font(.system(size: 12))
+            Text("Sample data — not your swings")
+                .font(.system(size: 11, design: .monospaced))
+        }
+        .foregroundStyle(Color.dusk)
+        .frame(maxWidth: .infinity).padding(.vertical, 8)
+        .background(Color.amber, in: RoundedRectangle(cornerRadius: 10))
     }
 }
 

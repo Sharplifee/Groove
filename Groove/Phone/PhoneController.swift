@@ -29,6 +29,20 @@ final class PhoneController: NSObject, ObservableObject {
 
     let permissions = Permissions()
 
+    /// Demo mode shows generated swings on every screen so the layout can be
+    /// seen populated without hitting balls. Held in memory only.
+    @Published var isDemoMode = false
+    var realSwingsBackup: [Swing]?
+
+    /// Preview/demo constructor — no WCSession, no audio, no motion.
+    static func preview(swings: [Swing]) -> PhoneController {
+        let c = PhoneController(previewing: true)
+        c.swings = swings
+        c.config.hasOnboarded = true
+        c.config.hasCalibrated = true
+        return c
+    }
+
     func refreshMicPermission() { permissions.refresh() }
     func requestMicrophone() async { await permissions.requestAll() }
     func openSettings() { permissions.openSettings() }
@@ -71,8 +85,11 @@ final class PhoneController: NSObject, ObservableObject {
         q.qualityOfService = .userInitiated; return q
     }()
 
-    override init() {
+    override convenience init() { self.init(previewing: false) }
+
+    init(previewing: Bool) {
         super.init()
+        guard !previewing else { return }
         swings = store.load()
         if WCSession.isSupported() {
             WCSession.default.delegate = self
@@ -226,7 +243,7 @@ final class PhoneController: NSObject, ObservableObject {
         pendingPelvisLead = nil
         pendingPelvisAt = nil
         swings.insert(swing, at: 0)
-        store.save(swings)
+        persist()
     }
 
     /// Milliseconds by which pelvis angular velocity peaked before the wrist.
@@ -261,17 +278,24 @@ final class PhoneController: NSObject, ObservableObject {
         return url
     }
 
+    /// Guards every write path — generated swings must never reach the store or
+    /// they'd contaminate a real baseline.
+    private func persist() {
+        guard !isDemoMode else { return }
+        store.save(swings)
+    }
+
     func delete(_ swing: Swing) {
         recentlyDeleted = swing
         swings.removeAll { $0.id == swing.id }
-        store.save(swings)
+        persist()
     }
 
     func undoDelete() {
         guard let s = recentlyDeleted else { return }
         swings.insert(s, at: 0)
         swings.sort { $0.date > $1.date }
-        store.save(swings)
+        persist()
         recentlyDeleted = nil
     }
 

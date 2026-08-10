@@ -1,0 +1,129 @@
+name: TestFlight
+
+# Push to main → build → sign → TestFlight. Roughly 8-12 min of build plus
+# 5-15 min of Apple processing before it appears on the phone.
+#
+# macOS runners bill at 10x. On the free private-repo tier that's about 200
+# macOS-minutes a month, so budget ~15-20 builds. Concurrency below cancels
+# superseded runs so a burst of pushes doesn't burn the allowance.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+
+concurrency:
+  group: testflight
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+
+    env:
+      SCHEME: Groove
+      TEAM_ID: XF783932R2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      # Version comes from the run number so TestFlight never rejects a
+      # duplicate build. Marketing version stays whatever project.yml says.
+      - name: Set build number
+        run: |
+          agvtool new-version -all ${{ github.run_number }}
+
+      - name: Import signing certificate
+        env:
+          CERT_P12: ${{ secrets.DIST_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN=build.keychain
+          security create-keychain -p "" $KEYCHAIN
+          security set-keychain-settings -lut 3600 $KEYCHAIN
+          security unlock-keychain -p "" $KEYCHAIN
+          security list-keychains -d user -s $KEYCHAIN login.keychain
+          echo "$CERT_P12" | base64 --decode > cert.p12
+          security import cert.p12 -k $KEYCHAIN -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "" $KEYCHAIN
+          rm cert.p12
+
+      - name: Install provisioning profiles
+        env:
+          PROFILE_IOS: ${{ secrets.PROFILE_IOS }}
+          PROFILE_WATCH: ${{ secrets.PROFILE_WATCH }}
+        run: |
+          DIR=~/Library/MobileDevice/Provisioning\ Profiles
+          mkdir -p "$DIR"
+          echo "$PROFILE_IOS"   | base64 --decode > "$DIR/ios.mobileprovision"
+          echo "$PROFILE_WATCH" | base64 --decode > "$DIR/watch.mobileprovision"
+
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project Groove.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Groove.xcarchive \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            -allowProvisioningUpdates
+
+      - name: Export IPA
+        run: |
+          cat > ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+          </dict></plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath build/Groove.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath build/export
+
+      # App Store Connect API key — the same Admin key already in the registry.
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$ASC_KEY_P8" | base64 --decode \
+            > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          xcrun altool --upload-app \
+            --type ios \
+            --file build/export/*.ipa \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+          rm -rf ~/private_keys
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/
+            ~/Library/Logs/gym
+          retention-days: 5
