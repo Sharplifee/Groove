@@ -17,6 +17,7 @@
 		78728816A35670D9FB1A8D3C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D75D2624BF64A2F7CC3FFFC5 /* Assets.xcassets */; };
 		A171A33D57A8376C428203CF /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = F347A5036CC7B9232C3A9DEA /* Models.swift */; };
 		A1F253B494E904CFCC712590 /* RoutineDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A33CE55F44CF0D19D049056D /* RoutineDetector.swift */; };
+		B50F6EA2B846B2A1547426A3 /* DemoData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20434F865612EA69881A6B87 /* DemoData.swift */; };
 		BE4F5D13D79F0FF5E06AF943 /* SwingAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C37A04DAD794C542888A91F0 /* SwingAnalyzer.swift */; };
 		C1D18D7DA5D47482FB4ACBF5 /* PhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D43BA5F9493A425F51404AC /* PhoneController.swift */; };
 		CDF2C3F7E7C9B753E7211EDB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D75D2624BF64A2F7CC3FFFC5 /* Assets.xcassets */; };
@@ -55,6 +56,7 @@
 		1369C35C5761FD4AEBD409F2 /* Groove Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Groove Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		18A7755E15FE38DBA2F3C30C /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
 		1C4D184CDFBDACB32E5B79EB /* WatchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchController.swift; sourceTree = "<group>"; };
+		20434F865612EA69881A6B87 /* DemoData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoData.swift; sourceTree = "<group>"; };
 		415BD591D32B91EC7E5C0C0A /* Groove.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Groove.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4D43BA5F9493A425F51404AC /* PhoneController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneController.swift; sourceTree = "<group>"; };
 		6FCF9F82558B8284B40AE61E /* AudioHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioHost.swift; sourceTree = "<group>"; };
@@ -82,6 +84,7 @@
 			isa = PBXGroup;
 			children = (
 				6FCF9F82558B8284B40AE61E /* AudioHost.swift */,
+				20434F865612EA69881A6B87 /* DemoData.swift */,
 				F423F8CEE886427D6F10CD8C /* Onboarding.swift */,
 				EDEE075BB93A5C42DFFF8477 /* Permissions.swift */,
 				4D43BA5F9493A425F51404AC /* PhoneController.swift */,
@@ -248,6 +251,7 @@
 			files = (
 				3A660F1ED650F7F969ABB579 /* AudioHost.swift in Sources */,
 				ED8866A4F4E38732094F32F2 /* ConfigSync.swift in Sources */,
+				B50F6EA2B846B2A1547426A3 /* DemoData.swift in Sources */,
 				A171A33D57A8376C428203CF /* Models.swift in Sources */,
 				EF960DF3D53CF01BB6C14FCF /* Onboarding.swift in Sources */,
 				4EE6BC93110C27606F2D8C01 /* Permissions.swift in Sources */,
