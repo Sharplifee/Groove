@@ -29,6 +29,15 @@ extension ShapeStyle where Self == Color {
     static var bone:  Color { Color(red: 0.969, green: 0.957, blue: 0.941) }
     /// Stone — secondary text and labels.
     static var muted: Color { Color(red: 0.694, green: 0.702, blue: 0.702) }
+
+    /// Augusta Green — filled buttons and active state. Deliberately quieter than
+    /// the old yellow: at 1.9:1 against the pine ground the fill recedes, which is
+    /// the point — yellow now only appears when something is actually happening.
+    /// Bone text on it is 6.9:1, so the label itself stays fully legible.
+    static var fairway: Color { Color(red: 0.000, green: 0.404, blue: 0.278) }
+    /// Crimson — destructive fills only. Replaces system red, which was louder
+    /// than anything else on screen.
+    static var crimson: Color { Color(red: 0.729, green: 0.047, blue: 0.184) }
 }
 
 // MARK: - Root
@@ -48,7 +57,10 @@ struct RootView: View {
                 }
             }
         }
-        .tint(.amber)
+        // Tab bar and inline buttons take New Growth, not Augusta Green: a dark
+        // green on the pine ground is 1.9:1 and effectively invisible, whereas
+        // this reads 8.8:1. Green still means "interactive", amber stays reserved.
+        .tint(.turf)
         .preferredColorScheme(.dark)
         .overlay(alignment: .bottom) {
             if let deleted = c.recentlyDeleted { UndoToast(c: c, swing: deleted) }
@@ -254,7 +266,7 @@ struct SessionCard: View {
                 Button(expanded ? "Hide swings" : "Show swings") {
                     withAnimation(.snappy) { expanded.toggle() }
                 }
-                .font(.caption).tint(.amber)
+                .font(.caption).tint(.turf)
 
                 if expanded {
                     ForEach(session.swings.filter(\.struck)) { s in
@@ -423,9 +435,9 @@ struct SetupView: View {
                             ShareLink(item: url) {
                                 Text("Export everything")
                                     .font(.system(size: 15, weight: .heavy, design: .rounded))
-                                    .foregroundStyle(Color.dusk)
+                                    .foregroundStyle(Color.bone)
                                     .frame(maxWidth: .infinity).padding(13)
-                                    .background(Color.amber, in: RoundedRectangle(cornerRadius: 12))
+                                    .background(Color.fairway, in: RoundedRectangle(cornerRadius: 12))
                             }
                         }
                         Text("Full JSON including every raw trace, for your own analysis.")
@@ -530,16 +542,16 @@ struct KV: View {
     }
 }
 
-/// Amber means the app is doing something. Red is reserved for destructive only —
-/// it never doubles as a recording indicator.
+/// Buttons are green; amber means the app is doing something. Crimson is reserved
+/// for destructive only — it never doubles as a recording indicator.
 struct Primary: ButtonStyle {
     var destructive = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 15, weight: .heavy, design: .rounded))
-            .foregroundStyle(destructive ? Color.white : Color.dusk)
+            .foregroundStyle(Color.bone)
             .frame(maxWidth: .infinity).padding(13)
-            .background(destructive ? Color.red : Color.amber,
+            .background(destructive ? Color.crimson : Color.fairway,
                         in: RoundedRectangle(cornerRadius: 12))
             .opacity(configuration.isPressed ? 0.8 : 1)
     }
@@ -554,7 +566,7 @@ struct UndoToast: View {
             Text("Swing removed").font(.footnote)
             Spacer()
             Button("Undo") { c.undoDelete() }
-                .font(.footnote.bold()).tint(.amber)
+                .font(.footnote.bold()).tint(.turf)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(Color.panel, in: Capsule())
