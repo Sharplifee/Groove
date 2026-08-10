@@ -33,7 +33,9 @@ final class PhoneController: NSObject, ObservableObject {
     /// seen populated without hitting balls. Held in memory only. No longer
     /// reachable from the UI — kept because the #Previews in DemoData depend on it.
     @Published var isDemoMode = false
-    var realSwingsBackup: [Swing]?
+    /// Published so the real-swing count on Setup refreshes if a genuine swing
+    /// lands while sample data is on screen.
+    @Published var realSwingsBackup: [Swing]?
 
     /// Appearance. Phone-local and deliberately outside `Config`, so changing it
     /// never pushes a new application context to the watch. See Theme.swift.
@@ -242,6 +244,7 @@ final class PhoneController: NSObject, ObservableObject {
     private func ingest(swing: Swing) {
         // The spool retries until acknowledged, so duplicates are expected.
         guard !swings.contains(where: { $0.id == swing.id }) else { return }
+        guard realSwingsBackup?.contains(where: { $0.id == swing.id }) != true else { return }
         var swing = swing
         // Pelvis sequencing is the one metric a single sensor cannot produce.
         // Attach the snapshot taken at impact, and only if it plausibly belongs
@@ -252,8 +255,17 @@ final class PhoneController: NSObject, ObservableObject {
         }
         pendingPelvisLead = nil
         pendingPelvisAt = nil
-        swings.insert(swing, at: 0)
-        persist()
+        // Demo mode is showing generated data, so a genuine swing must go to the
+        // real set behind it — appending here would put it in the fake list and
+        // persist() would then refuse to write it, losing it for good. The watch
+        // has already been acked by this point, so nothing else holds a copy.
+        if isDemoMode {
+            realSwingsBackup?.insert(swing, at: 0)
+            if let real = realSwingsBackup { store.save(real) }
+        } else {
+            swings.insert(swing, at: 0)
+            persist()
+        }
     }
 
     /// Milliseconds by which pelvis angular velocity peaked before the wrist.
@@ -276,6 +288,8 @@ final class PhoneController: NSObject, ObservableObject {
     /// Writes the full swing history to a file for the share sheet. Raw traces
     /// included — there was no way to get data out of the app at all before this.
     func exportURL() -> URL? {
+        // Never export generated data under a filename that reads as real.
+        guard !isDemoMode else { return nil }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601

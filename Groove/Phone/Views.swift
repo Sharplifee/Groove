@@ -418,8 +418,27 @@ struct SetupView: View {
                             .font(.caption2).foregroundStyle(.muted)
                     }
 
+                    Card("sample data") {
+                        Toggle("Show sample data", isOn: Binding(
+                            get: { c.isDemoMode },
+                            set: { c.setDemoMode($0) }))
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Fills every screen with generated swings so you can see where everything lands before you've hit a ball. Nothing is written to disk, and your real swings come back untouched when you switch it off.")
+                            .font(.caption).foregroundStyle(.muted)
+                        if c.isDemoMode {
+                            Text("A banner sits on Range and Profile the whole time it's on, so it can't be mistaken for a real session.")
+                                .font(.caption2).foregroundStyle(.alert)
+                        }
+                    }
+
                     Card("your data") {
-                        KV("swings stored", "\(c.swings.count)")
+                        KV("swings stored", c.isDemoMode
+                           ? "\(c.realSwingsBackup?.count ?? 0)"
+                           : "\(c.swings.count)")
+                        if c.isDemoMode {
+                            Text("Export is off while sample data is showing, so you can't ship a file of fake swings by accident.")
+                                .font(.caption2).foregroundStyle(.alert)
+                        }
                         if let url = c.exportURL() {
                             ShareLink(item: url) {
                                 Text("Export everything")
