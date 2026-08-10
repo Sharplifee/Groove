@@ -341,6 +341,17 @@ struct SetupView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
+                    Card("appearance") {
+                        Picker("Theme", selection: Binding(
+                            get: { c.theme },
+                            set: { c.theme = $0 })) {
+                                ForEach(Theme.allCases) { Text($0.label).tag($0) }
+                            }
+                            .pickerStyle(.segmented)
+                        Text(c.theme.blurb)
+                            .font(.caption).foregroundStyle(.muted)
+                    }
+
                     Card("you") {
                         Picker("You play", selection: $c.config.handedness) {
                             Text("Right").tag(Handedness.right); Text("Left").tag(Handedness.left)
@@ -405,17 +416,6 @@ struct SetupView: View {
                             .buttonStyle(Primary())
                         Text("Worth redoing if you change your pre-shot routine.")
                             .font(.caption2).foregroundStyle(.muted)
-                    }
-
-                    Card("appearance") {
-                        Picker("Theme", selection: Binding(
-                            get: { c.theme },
-                            set: { c.theme = $0 })) {
-                                ForEach(Theme.allCases) { Text($0.label).tag($0) }
-                            }
-                            .pickerStyle(.segmented)
-                        Text(c.theme.blurb)
-                            .font(.caption).foregroundStyle(.muted)
                     }
 
                     Card("your data") {
