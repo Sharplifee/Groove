@@ -1,8 +1,8 @@
 import SwiftUI
 
-// The palette moved to Theme.swift so it can change at runtime. The
-// ShapeStyle-extension trick that makes both `Color.dusk` and
-// `.foregroundStyle(.muted)` resolve is documented there.
+// The palette lives in Theme.swift; type, spacing and components live in
+// DesignSystem.swift. Nothing in this file defines a style of its own — if a
+// screen needs something new, it goes in the design system first.
 
 // MARK: - Root
 
@@ -11,21 +11,23 @@ struct RootView: View {
 
     /// Tab selection lives here, on the parent, so it survives the `.id()` below
     /// rebuilding the tab tree — otherwise changing theme in Setup would bounce
-    /// you back to Range.
+    /// you back to the first tab.
     @State private var tab = 0
 
     var body: some View {
         Group {
             if !c.config.hasOnboarded {
                 OnboardingView(c: c)
+            } else if c.isPadLayout {
+                PairedDeviceView(c: c)
             } else {
                 TabView(selection: $tab) {
-                    RangeView(c: c).tabItem { Label("Range", systemImage: "flag.circle") }
-                        .tag(0)
-                    ProfileView(c: c).tabItem { Label("Profile", systemImage: "chart.xyaxis.line") }
-                        .tag(1)
-                    SetupView(c: c).tabItem { Label("Setup", systemImage: "slider.horizontal.3") }
-                        .tag(2)
+                    TodayView(c: c)
+                        .tabItem { Label("Today", systemImage: Icon.today) }.tag(0)
+                    FormView(c: c)
+                        .tabItem { Label("Form", systemImage: Icon.form) }.tag(1)
+                    SetupView(c: c)
+                        .tabItem { Label("Setup", systemImage: Icon.setup) }.tag(2)
                 }
             }
         }
@@ -33,189 +35,259 @@ struct RootView: View {
         // a dependency — so switching theme has to force the subtree to re-render.
         // Safe here: the live session lives in `c`, a StateObject owned by this
         // view, so nothing session-scoped is torn down.
-        .id(c.theme)
-        // Interactive elements take turf — New Growth on pine (8.8:1), Augusta
-        // Green on cream (6.3:1). Amber stays reserved for live state.
+        .id("\(c.theme.rawValue)-\(c.showsBand)")
         .tint(.turf)
         .preferredColorScheme(c.theme.colorScheme)
         .overlay(alignment: .bottom) {
             if let deleted = c.recentlyDeleted { UndoToast(c: c, swing: deleted) }
         }
-        .animation(.snappy, value: c.recentlyDeleted?.id)
+        .animation(Motion.toast, value: c.recentlyDeleted?.id)
     }
 }
 
-// MARK: - Range
+/// Every screen sits on this, so the ground, padding and scroll behaviour are
+/// identical everywhere.
+private struct Screen<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: Space.m) { content }
+                    .padding(Space.l)
+                    .padding(.bottom, Space.xxl)
+            }
+            .background(Color.dusk)
+            .navigationTitle(title)
+            .themedNavBar()
+        }
+    }
+}
+
+// MARK: - Today
 //
 // Deliberately NOT a live dashboard. During a session this phone is in a back
 // pocket and cannot be looked at. This is what you see before you start and
 // after you finish; the watch is the only live surface.
+//
+// It used to be called "Range", which reads as a rangefinder and says nothing
+// about what the screen holds.
 
-struct RangeView: View {
+struct TodayView: View {
     @ObservedObject var c: PhoneController
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    if c.isDemoMode { DemoBanner() }
-                    if c.isSessionLive { liveBanner } else { readyBanner }
+        Screen(title: "Today") {
+            if c.isShowingExample {
+                Banner(icon: Icon.sample, text: "This is an example session, not your swings.")
+            }
 
-                    if c.isSessionLive {
-                        Card("while you're out there") {
-                            Bullet("Your watch is running the session.")
-                            Bullet("Audio drops when you start a real swing.")
-                            Bullet("Come back here when you're done.")
-                        }
-                    } else if let last = c.sessions.first {
-                        SessionCard(session: last, isLatest: true)
-                    } else {
-                        EmptyState(icon: "flag.circle",
-                                   title: "No sessions yet",
-                                   message: "Open Groove on your watch and press Start. Pocket this phone and go hit balls.")
-                    }
-
-                    if let blocker = c.permissions.blocker {
-                        Card("this won't run yet") {
-                            Text(blocker).font(.footnote).foregroundStyle(.muted)
-                            Button("Open Settings") { c.openSettings() }
-                                .buttonStyle(Primary())
-                        }
-                    }
-
-                    Card("before you start") {
-                        Bullet("Leave this app open and pocket the phone. If it's fully quit, the watch can't reach it and your audio won't duck.")
-                        Bullet("It holds a silent audio session while you're out there — that's what stops iOS suspending it in your pocket.")
-                        if c.routeUnavailable {
-                            Text("No earbuds connected — it'll fall back to the phone mic, which is muffled in a pocket.")
-                                .font(.footnote).foregroundStyle(.alert)
-                        }
-                        if c.config.hasCalibrated && c.config.gateUntilFirstImpact {
-                            Text("Your first shot of a session won't duck — it waits until it's seen one real strike.")
-                                .font(.caption2).foregroundStyle(.muted)
-                        }
-                    }
-
-                    Card("setup check") {
-                        KV("audio in", c.inputName)
-                        KV("input delay", String(format: "%.0f ms", c.measuredLatency * 1000))
-                        KV("ducking", c.config.hasCalibrated ? "on" : "off — not calibrated",
-                           tint: c.config.hasCalibrated ? .turf : .alert)
-                        if !c.config.hasCalibrated {
-                            Text("Teach it your routine in Setup to turn ducking on.")
-                                .font(.caption2).foregroundStyle(.muted)
-                        }
-                    }
+            if c.isSessionLive {
+                liveHeader
+                Card("while you're out there") {
+                    Bullet("Your watch is running the session.")
+                    Bullet("Your music drops the moment you start a real swing, and you hear the strike.")
+                    Bullet("Come back here when you're done.")
                 }
-                .padding(16)
+            } else {
+                startHeader
+                if let last = c.sessions.first {
+                    SessionCard(session: last, isLatest: true)
+                }
+                if c.sessions.count > 1 {
+                    TrendCard(sessions: Array(c.sessions.prefix(8)).reversed())
+                }
             }
-            .background(Color.dusk)
-            .navigationTitle("Range")
-            .themedNavBar()
-            .task {
-                c.permissions.refresh()
-                if c.permissions.microphone == .unknown { await c.permissions.requestAll() }
+
+            if let blocker = c.permissions.blocker {
+                Card("this won't run yet") {
+                    Note(blocker, tint: .alert)
+                    Button("Open Settings") { c.openSettings() }
+                        .buttonStyle(PrimaryButton())
+                }
             }
+
+            if !c.config.hasCalibrated {
+                Card("teach it your swing") {
+                    Note("Until it has watched you hit a few balls, it can't tell a real swing from a rehearsal, so your music won't drop.")
+                    Button("Teach it now") { c.beginCalibration() }
+                        .buttonStyle(PrimaryButton())
+                }
+            }
+        }
+        .task {
+            c.permissions.refresh()
+            if c.permissions.microphone == .unknown { await c.permissions.requestAll() }
         }
     }
 
-    private var readyBanner: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "applewatch")
-                .font(.system(size: 34)).foregroundStyle(.turf)
+    private var startHeader: some View {
+        VStack(spacing: Space.m) {
+            Image(systemName: Icon.watch)
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.turf)
             Text("Start from your watch")
-                .font(.system(size: 19, weight: .heavy, design: .rounded))
-            Text("Then pocket this phone.")
-                .font(.footnote).foregroundStyle(.muted)
+                .font(.grooveHeadline).foregroundStyle(.bone)
+            Text("Then put this phone in your pocket.")
+                .font(.grooveCallout).foregroundStyle(.muted)
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 28)
-        .background(Color.panel, in: RoundedRectangle(cornerRadius: 18))
+        .frame(maxWidth: .infinity).padding(.vertical, Space.xl)
+        .background(Color.panel, in: RoundedRectangle(cornerRadius: Radius.large))
+        .shadow(color: Elevation.card, radius: Elevation.cardRadius, y: Elevation.cardY)
     }
 
-    private var liveBanner: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 7) {
-                Circle().fill(Color.alert).frame(width: 9, height: 9)
-                Text("Session running").font(.system(size: 17, weight: .heavy, design: .rounded))
+    private var liveHeader: some View {
+        VStack(spacing: Space.s) {
+            HStack(spacing: Space.s) {
+                Circle().fill(Color.amber).frame(width: 9, height: 9)
+                Text("Session running").font(.grooveHeadline)
             }
             Text("\(c.summary.struckSwings.count) swings so far")
-                .font(.footnote).foregroundStyle(.muted)
+                .font(.grooveCallout).foregroundStyle(.muted)
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 24)
-        .background(Color.panel, in: RoundedRectangle(cornerRadius: 18))
+        .frame(maxWidth: .infinity).padding(.vertical, Space.xl)
+        .background(Color.panel, in: RoundedRectangle(cornerRadius: Radius.large))
+        .shadow(color: Elevation.card, radius: Elevation.cardRadius, y: Elevation.cardY)
     }
 }
 
-// MARK: - Profile
+/// Repeatability across recent sessions. Lower is better, so the axis is
+/// inverted deliberately — a rising line always means improving.
+struct TrendCard: View {
+    let sessions: [RangeSession]
 
-struct ProfileView: View {
+    private var values: [Double] {
+        sessions.map { $0.summary.repeatability }.filter { $0 > 0 }
+    }
+
+    var body: some View {
+        if values.count > 1 {
+            ChartFrame(title: "are you getting more consistent",
+                       caption: "Each point is one session. Higher is better — the line rises as your swing becomes more repeatable.",
+                       height: 120) {
+                TrendLine(values: values)
+            }
+        }
+    }
+}
+
+private struct TrendLine: View {
+    let values: [Double]
+
+    var body: some View {
+        GeometryReader { g in
+            let lo = (values.min() ?? 0) - 0.5
+            let hi = (values.max() ?? 1) + 0.5
+            let span = max(0.1, hi - lo)
+            let x = { (i: Int) in g.size.width * Double(i) / Double(max(1, values.count - 1)) }
+            // Inverted: low repeatability is good, so it plots high.
+            let y = { (v: Double) in g.size.height * ((v - lo) / span) }
+
+            ZStack {
+                Path { p in
+                    for (i, v) in values.enumerated() {
+                        i == 0 ? p.move(to: .init(x: x(i), y: y(v)))
+                               : p.addLine(to: .init(x: x(i), y: y(v)))
+                    }
+                }
+                .stroke(Color.accent, style: .init(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+
+                ForEach(Array(values.enumerated()), id: \.offset) { i, v in
+                    Circle().fill(Color.accent)
+                        .frame(width: 5, height: 5)
+                        .position(x: x(i), y: y(v))
+                }
+            }
+        }
+        .accessibilityLabel("Repeatability across your recent sessions")
+    }
+}
+
+// MARK: - Form
+//
+// The analysis surface. This used to be "Profile" holding one tile that said
+// nothing to compare yet.
+
+struct FormView: View {
     @ObservedObject var c: PhoneController
     @State private var confirmDelete: Swing?
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    if c.isDemoMode { DemoBanner() }
-                    if c.summary.struckSwings.count < 2 {
-                        EmptyState(icon: "chart.xyaxis.line",
-                                   title: "Nothing to compare yet",
-                                   message: "Repeatability needs a handful of swings. Log a session and come back.")
-                    } else {
-                        Card("repeatability") {
-                            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                                Text(String(format: "%.1f", c.summary.repeatability))
-                                    .font(.system(size: 44, weight: .heavy, design: .rounded))
-                                Text("%").font(.title3).foregroundStyle(.muted)
-                            }
-                            Text(c.summary.repeatabilityVerdict)
-                                .font(.footnote).foregroundStyle(.muted)
-                            Text("How much your tempo moves between swings. Lower is better.")
-                                .font(.caption2).foregroundStyle(.muted)
-                        }
-
-                        Card("every swing, stacked on impact") {
-                            EnsembleChart(traces: c.summary.struckSwings.map(\.normalizedTrace))
-                                .frame(height: 190)
-                            Text("A tight band means you're repeating. Where it fans out is where it breaks down.")
-                                .font(.caption2).foregroundStyle(.muted)
-                        }
-
-                        Card("tempo") {
-                            KV("yours", String(format: "%.2f : 1", c.summary.meanTempo))
-                            KV("tour reference", "3.00 : 1")
-                        }
-                    }
-
-                    if !c.sessions.isEmpty {
-                        Text("SESSIONS")
-                            .font(.system(size: 9.5, design: .monospaced)).kerning(1.6)
-                            .foregroundStyle(.muted)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        ForEach(c.sessions) { s in
-                            SessionCard(session: s,
-                                        isLatest: s.id == c.sessions.first?.id,
-                                        onDelete: { confirmDelete = $0 })
-                        }
-                    }
-                }
-                .padding(16)
+        Screen(title: "Form") {
+            if c.isShowingExample {
+                Banner(icon: Icon.sample, text: "This is an example session, not your swings.")
             }
-            .background(Color.dusk)
-            .navigationTitle("Profile")
-            .themedNavBar()
-            .confirmationDialog("Remove this swing?",
-                                isPresented: .init(get: { confirmDelete != nil },
-                                                   set: { if !$0 { confirmDelete = nil } }),
-                                titleVisibility: .visible) {
-                Button("Remove", role: .destructive) {
-                    if let s = confirmDelete { c.delete(s) }
-                    confirmDelete = nil
+
+            if c.summary.struckSwings.count < 2 {
+                EmptyState(icon: Icon.form,
+                           title: "Nothing to compare yet",
+                           message: "This fills in once you've hit a handful of balls in a session.")
+            } else {
+                repeatabilityCard
+                ChartFrame(title: "every swing, stacked on impact",
+                           caption: "Each faint line is one swing, lined up on the moment you hit the ball. A tight band means you're repeating. Where it fans out is where it breaks down.") {
+                    EnsembleChart(traces: c.summary.struckSwings.map(\.normalizedTrace))
                 }
-                Button("Keep it", role: .cancel) { confirmDelete = nil }
-            } message: {
-                Text("It stops counting toward your repeatability. You can undo this.")
+                tempoCard
+                if let lead = c.summary.meanPelvisLead { sequencingCard(lead) }
             }
+
+            if !c.sessions.isEmpty {
+                SectionHeader("sessions")
+                ForEach(c.sessions) { s in
+                    SessionCard(session: s,
+                                isLatest: s.id == c.sessions.first?.id,
+                                onDelete: { confirmDelete = $0 })
+                }
+            }
+        }
+        .confirmationDialog("Remove this swing?",
+                            isPresented: .init(get: { confirmDelete != nil },
+                                               set: { if !$0 { confirmDelete = nil } }),
+                            titleVisibility: .visible) {
+            Button("Remove", role: .destructive) {
+                if let s = confirmDelete { c.delete(s) }
+                confirmDelete = nil
+            }
+            Button("Keep it", role: .cancel) { confirmDelete = nil }
+        } message: {
+            Text("It stops counting toward your repeatability. You can undo this.")
+        }
+    }
+
+    private var repeatabilityCard: some View {
+        Card("repeatability") {
+            HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                Text(String(format: "%.1f", c.summary.repeatability))
+                    .font(.grooveHero).foregroundStyle(.bone)
+                Text("%").font(.grooveHeadline).foregroundStyle(.muted)
+            }
+            Text(c.summary.repeatabilityVerdict)
+                .font(.grooveBody).foregroundStyle(.bone)
+            Note("How much your timing moves from swing to swing. Lower is better — 0% would be the same swing every time.")
+        }
+    }
+
+    private var tempoCard: some View {
+        Card("tempo") {
+            HStack(spacing: Space.l) {
+                StatTile("yours", String(format: "%.2f", c.summary.meanTempo), unit: ": 1")
+                StatTile("tour average", "3.00", unit: ": 1", tint: .accent)
+            }
+            Note("How long your backswing takes compared with your downswing. Most tour players sit near three to one. There's no right number — yours being the same every time matters more than matching theirs.")
+        }
+    }
+
+    private func sequencingCard(_ lead: Double) -> some View {
+        Card("hips and hands") {
+            StatTile("your hips lead by",
+                     String(format: "%.0f", lead), unit: "ms",
+                     tint: lead > 0 ? .turf : .alert)
+            Note(lead > 0
+                 ? "Your hips start turning before your hands come down, which is the order you want."
+                 : "Your hands are arriving before your hips turn. That's the reverse of what most good swings do.")
+            Note("Measured from the phone in your pocket, so it only appears when you're carrying it.")
         }
     }
 }
@@ -229,43 +301,47 @@ struct SessionCard: View {
     var body: some View {
         Card(isLatest ? "last session"
                       : session.date.formatted(date: .abbreviated, time: .omitted)) {
-            HStack(spacing: 22) {
-                Stat("swings", "\(session.struckCount)")
-                Stat("repeatability",
-                     session.struckCount > 1
-                     ? String(format: "%.1f%%", session.summary.repeatability)
-                     : "—")
+            HStack(spacing: Space.l) {
+                StatTile("swings", "\(session.struckCount)")
+                StatTile("repeatability",
+                         session.struckCount > 1
+                         ? String(format: "%.1f", session.summary.repeatability)
+                         : "—",
+                         unit: session.struckCount > 1 ? "%" : nil)
+                StatTile("tempo",
+                         session.struckCount > 0
+                         ? String(format: "%.2f", session.summary.meanTempo)
+                         : "—")
             }
-            // Rehearsal count is diagnostic, not a score. It reads small.
-            Text("\(session.swings.count - session.struckCount) rehearsals filtered out")
-                .font(.caption2).foregroundStyle(.muted)
+
+            let rehearsals = session.swings.count - session.struckCount
+            if rehearsals > 0 {
+                Note("\(rehearsals) rehearsal\(rehearsals == 1 ? "" : "s") ignored — practice swings don't count toward your numbers.")
+            }
 
             if onDelete != nil {
                 Button(expanded ? "Hide swings" : "Show swings") {
-                    withAnimation(.snappy) { expanded.toggle() }
+                    withAnimation(Motion.transition) { expanded.toggle() }
                 }
-                .font(.caption).tint(.turf)
+                .font(.grooveCallout.weight(.semibold)).tint(.turf)
 
                 if expanded {
                     ForEach(session.swings.filter(\.struck)) { s in
                         HStack {
                             Text(s.date, style: .time)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.muted)
+                                .font(.grooveReadout).foregroundStyle(.muted)
                             Spacer()
                             Text(String(format: "%.2f", s.metrics.tempoRatio))
-                                .font(.system(.caption, design: .monospaced))
-                            Button {
-                                onDelete?(s)
-                            } label: {
-                                Image(systemName: "minus.circle").foregroundStyle(.muted)
+                                .font(.grooveReadout).foregroundStyle(.bone)
+                            Button { onDelete?(s) } label: {
+                                Image(systemName: Icon.remove).foregroundStyle(.muted)
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Remove this swing")
                         }
                         .padding(.vertical, 3)
                     }
-                    Text("Remove a mishit so it stops dragging your number.")
-                        .font(.caption2).foregroundStyle(.muted)
+                    Note("Remove a mishit so it stops dragging your number down.")
                 }
             }
         }
@@ -275,13 +351,14 @@ struct SessionCard: View {
 /// The signature view — every swing overlaid, median and interquartile band on top.
 struct EnsembleChart: View {
     let traces: [[Double]]
+    @State private var drawn = false
 
     var body: some View {
         GeometryReader { geo in
             let valid = traces.filter { !$0.isEmpty }
             if valid.count < 2 {
                 Text("A few more swings and the overlay appears here.")
-                    .font(.caption).foregroundStyle(.muted)
+                    .font(.grooveCallout).foregroundStyle(.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 let n = valid[0].count
@@ -323,248 +400,256 @@ struct EnsembleChart: View {
                     Path { p in
                         p.move(to: .init(x: ix, y: 0))
                         p.addLine(to: .init(x: ix, y: geo.size.height))
-                    }.stroke(Color.bone.opacity(0.45),
+                    }.stroke(Color.accent.opacity(0.8),
                              style: .init(lineWidth: 1, dash: [3, 4]))
+
+                    Text("impact")
+                        .font(.grooveEyebrow).foregroundStyle(.accent)
+                        .position(x: min(geo.size.width - 22, ix + 22), y: 9)
                 }
+                .opacity(drawn ? 1 : 0)
+                .onAppear { withAnimation(Motion.draw) { drawn = true } }
             }
         }
-        .accessibilityLabel("Every swing overlaid and aligned on impact")
+        .accessibilityLabel("Every swing overlaid and lined up on the moment of impact")
     }
 }
 
 // MARK: - Setup
+//
+// Ordered by how often each thing is actually touched.
 
 struct SetupView: View {
     @ObservedObject var c: PhoneController
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    Card("appearance") {
-                        Picker("Theme", selection: Binding(
-                            get: { c.theme },
-                            set: { c.theme = $0 })) {
-                                ForEach(Theme.allCases) { Text($0.label).tag($0) }
-                            }
-                            .pickerStyle(.segmented)
-                        Text(c.theme.blurb)
-                            .font(.caption).foregroundStyle(.muted)
-                    }
+        Screen(title: "Setup") {
+            youCard
+            duckingCard
+            routineCard
+            appearanceCard
+            sampleCard
+            dataCard
+            limitsCard
+        }
+    }
 
-                    Card("you") {
-                        Picker("You play", selection: $c.config.handedness) {
-                            Text("Right").tag(Handedness.right); Text("Left").tag(Handedness.left)
-                        }.pickerStyle(.segmented)
-
-                        Picker("Watch on", selection: $c.config.watchWrist) {
-                            Text("Left").tag(Wrist.left); Text("Right").tag(Wrist.right)
-                        }.pickerStyle(.segmented)
-
-                        Picker("Phone pocket", selection: $c.config.pocket) {
-                            Text("Back R").tag(Pocket.backRight)
-                            Text("Back L").tag(Pocket.backLeft)
-                            Text("None").tag(Pocket.none)
-                        }.pickerStyle(.segmented)
-
-                        Text(c.config.watchIsLeadWrist
-                             ? "Reading your lead wrist."
-                             : "Reading your trail wrist — transition looks very different from there.")
-                            .font(.caption).foregroundStyle(.muted)
-                    }
-
-                    Card("when to duck") {
-                        Picker("Sensitivity", selection: $c.config.sensitivity) {
-                            Text("More").tag(Sensitivity.eager)
-                            Text("Balanced").tag(Sensitivity.balanced)
-                            Text("Certain").tag(Sensitivity.strict)
-                        }.pickerStyle(.segmented)
-                        Text(c.config.sensitivity.label)
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(c.config.sensitivity.detail)
-                            .font(.caption).foregroundStyle(.muted)
-                    }
-
-                    Card("how long to hold") {
-                        Text("\(c.config.tailSeconds, specifier: "%.1f") seconds after the ball")
-                            .font(.system(size: 13, weight: .semibold))
-                        Slider(value: $c.config.tailSeconds, in: 0.3...1.5, step: 0.1)
-                        Text("Coming back the instant you make contact steps on the strike you opened the mic to hear.")
-                            .font(.caption).foregroundStyle(.muted)
-                    }
-
-                    Card("where you listen") {
-                        Picker("Route", selection: $c.config.route) {
-                            Text("Earbuds").tag(AudioRoute.earbuds)
-                            Text("Phone mic").tag(AudioRoute.phoneMic)
-                        }.pickerStyle(.segmented)
-                        KV("current input", c.inputName)
-                        Text("Any brand works — Bluetooth, wired, or USB-C all expose a mic.")
-                            .font(.caption).foregroundStyle(.muted)
-                        Text("A separate paired device isn't built yet. It's in the architecture but nothing implements it, so it's not offered here.")
-                            .font(.caption2).foregroundStyle(.muted)
-                    }
-
-                    Card("routine") {
-                        KV("calibrated", c.config.hasCalibrated ? "yes" : "no",
-                           tint: c.config.hasCalibrated ? .turf : .alert)
-                        if let r = c.calibrationResult {
-                            SeparationBar(real: r.meanRealConfidence,
-                                          rehearsal: r.meanRehearsalConfidence)
-                        }
-                        Button("Teach it again") { c.beginCalibration() }
-                            .buttonStyle(Primary())
-                        Text("Worth redoing if you change your pre-shot routine.")
-                            .font(.caption2).foregroundStyle(.muted)
-                    }
-
-                    Card("sample data") {
-                        Toggle("Show sample data", isOn: Binding(
-                            get: { c.isDemoMode },
-                            set: { c.setDemoMode($0) }))
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("Fills every screen with generated swings so you can see where everything lands before you've hit a ball. Nothing is written to disk, and your real swings come back untouched when you switch it off.")
-                            .font(.caption).foregroundStyle(.muted)
-                        if c.isDemoMode {
-                            Text("A banner sits on Range and Profile the whole time it's on, so it can't be mistaken for a real session.")
-                                .font(.caption2).foregroundStyle(.alert)
-                        }
-                    }
-
-                    Card("your data") {
-                        KV("swings stored", c.isDemoMode
-                           ? "\(c.realSwingsBackup?.count ?? 0)"
-                           : "\(c.swings.count)")
-                        if c.isDemoMode {
-                            Text("Export is off while sample data is showing, so you can't ship a file of fake swings by accident.")
-                                .font(.caption2).foregroundStyle(.alert)
-                        }
-                        if let url = c.exportURL() {
-                            ShareLink(item: url) {
-                                Text("Export everything")
-                                    .font(.system(size: 15, weight: .heavy, design: .rounded))
-                                    .foregroundStyle(Color.cream)
-                                    .frame(maxWidth: .infinity).padding(13)
-                                    .background(Color.fairway, in: RoundedRectangle(cornerRadius: 12))
-                            }
-                        }
-                        Text("Full JSON including every raw trace, for your own analysis.")
-                            .font(.caption2).foregroundStyle(.muted)
-                    }
-
-                    Card("what this can't do") {
-                        Bullet("No carry, spin, or face angle — it measures your body, not the ball.")
-                        Bullet("Impact timing is accurate to about 10 ms.")
-                        Bullet("Your watch's sensor saturates on hard strikes, so peak numbers are a floor.")
-                    }
-                }
-                .padding(16)
+    // 1 — the questions that change how a swing reads.
+    private var youCard: some View {
+        Card("you") {
+            Question(title: "Which hand do you play?",
+                     selection: $c.config.handedness) {
+                Text("Right-handed").tag(Handedness.right)
+                Text("Left-handed").tag(Handedness.left)
             }
-            .background(Color.dusk)
-            .navigationTitle("Setup")
-            .themedNavBar()
+
+            Question(title: "Which wrist is your watch on?",
+                     selection: $c.config.watchWrist) {
+                Text("Left wrist").tag(Wrist.left)
+                Text("Right wrist").tag(Wrist.right)
+            }
+
+            Question(title: "Which pocket holds your phone?",
+                     help: c.config.pocket == .none
+                        ? "Without the phone on you, it can't tell whether your hips lead your hands. Everything else still works."
+                        : "The phone reads your hips from your pocket.",
+                     selection: $c.config.pocket) {
+                Text("Back right").tag(Pocket.backRight)
+                Text("Back left").tag(Pocket.backLeft)
+                Text("Not on me").tag(Pocket.none)
+            }
+        }
+    }
+
+    // 2 — the behaviour most likely to need nudging after a session.
+    private var duckingCard: some View {
+        Card("when your music drops") {
+            Question(title: "How eager should it be?",
+                     help: c.config.sensitivity.detail,
+                     selection: $c.config.sensitivity) {
+                Text("More often").tag(Sensitivity.eager)
+                Text("Balanced").tag(Sensitivity.balanced)
+                Text("Only when sure").tag(Sensitivity.strict)
+            }
+
+            Divider().overlay(Color.muted.opacity(0.2))
+
+            VStack(alignment: .leading, spacing: Space.s) {
+                Text("How long to stay quiet after the ball")
+                    .font(.grooveSubhead).foregroundStyle(.bone)
+                HStack {
+                    Slider(value: $c.config.tailSeconds, in: 0.3...1.5, step: 0.1)
+                    Text(String(format: "%.1fs", c.config.tailSeconds))
+                        .font(.grooveReadout).foregroundStyle(.bone)
+                        .frame(width: 42, alignment: .trailing)
+                }
+                Note("Bringing your music straight back would talk over the strike you were trying to hear.")
+            }
+        }
+    }
+
+    // 3 — set once, revisited only if the routine changes.
+    private var routineCard: some View {
+        Card("your pre-shot routine") {
+            Row("taught", c.config.hasCalibrated ? "Yes" : "Not yet",
+                tint: c.config.hasCalibrated ? .turf : .alert)
+
+            if let r = c.calibrationResult {
+                SeparationBar(real: r.meanRealConfidence,
+                              rehearsal: r.meanRehearsalConfidence)
+            }
+
+            if !c.config.hasCalibrated {
+                Note("Until it's taught, your music won't drop — it can't yet tell a real swing from a practice one.", tint: .alert)
+            }
+
+            Button(c.config.hasCalibrated ? "Teach it again" : "Teach it now") {
+                c.beginCalibration()
+            }
+            .buttonStyle(c.config.hasCalibrated ? AnyButtonStyleBox(SecondaryButton())
+                                                : AnyButtonStyleBox(PrimaryButton()))
+
+            Note("Worth redoing if you change how you set up over the ball.")
+        }
+    }
+
+    // 4 — appearance.
+    private var appearanceCard: some View {
+        Card("appearance") {
+            Picker("Theme", selection: Binding(get: { c.theme },
+                                               set: { c.theme = $0 })) {
+                ForEach(Theme.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Note(c.theme.blurb)
+
+            Toggle("Green bar across the top", isOn: Binding(get: { c.showsBand },
+                                                             set: { c.showsBand = $0 }))
+                .font(.grooveSubhead)
+                .tint(.fairway)
+        }
+    }
+
+    // 5 — example data.
+    private var sampleCard: some View {
+        Card("example session") {
+            Toggle("Show an example session", isOn: Binding(get: { c.isShowingExample },
+                                                            set: { c.setExampleMode($0) }))
+                .font(.grooveSubhead)
+                .tint(.fairway)
+            Note("Fills the app with a made-up session so you can see what your own will look like. It's on until you record a real one, and nothing made-up is ever saved.")
+            if c.isShowingExample {
+                Note("A marker sits at the top of every screen while it's on, so it can't be mistaken for your own swings.", tint: .accent)
+            }
+        }
+    }
+
+    // 6 — data out.
+    private var dataCard: some View {
+        Card("your data") {
+            Row("swings saved", "\(c.realSwingCount)")
+            if c.isShowingExample {
+                Note("Export is off while the example is showing, so you can't send yourself a file of made-up swings.", tint: .accent)
+            }
+            if let url = c.exportURL() {
+                ShareLink(item: url) {
+                    Text("Export everything")
+                        .font(.grooveSubhead)
+                        .foregroundStyle(Color.cream)
+                        .frame(maxWidth: .infinity).padding(Space.m + 2)
+                        .background(Color.fairway,
+                                    in: RoundedRectangle(cornerRadius: Radius.small))
+                }
+            }
+            Note("A single file with every swing and its full motion trace, in case you want to look at it yourself.")
+        }
+    }
+
+    // 7 — honest limits, in plain words.
+    private var limitsCard: some View {
+        Card("what this can't tell you") {
+            Bullet("Nothing about the ball — no distance, no spin, no start line. It watches your body, not the shot.")
+            Bullet("How hard you hit it is a rough guide, not a number to chase. Above a certain force the watch stops being able to tell the difference, so a big hit and a huge one read the same.")
+            Bullet("It knows when you hit the ball to within about a hundredth of a second, which is plenty for timing but not for anything finer.")
+        }
+    }
+}
+
+/// Lets a card pick between two button styles without duplicating the label.
+struct AnyButtonStyleBox: ButtonStyle {
+    private let make: (Configuration) -> AnyView
+    init<S: ButtonStyle>(_ style: S) {
+        make = { AnyView(style.makeBody(configuration: $0)) }
+    }
+    func makeBody(configuration: Configuration) -> some View { make(configuration) }
+}
+
+// MARK: - Paired device
+//
+// The second screen. Read-only by design: it sits on a bag or a bench where it
+// can be seen but not usefully tapped, so it mirrors state and offers no
+// controls at all.
+
+struct PairedDeviceView: View {
+    @ObservedObject var c: PhoneController
+
+    var body: some View {
+        ZStack {
+            Color.dusk.ignoresSafeArea()
+            VStack(spacing: Space.xl) {
+                header
+
+                if c.isSessionLive || !c.summary.struckSwings.isEmpty {
+                    HStack(spacing: Space.l) {
+                        StatTile("swings", "\(c.summary.struckSwings.count)")
+                        StatTile("repeatability",
+                                 c.summary.struckSwings.count > 1
+                                 ? String(format: "%.1f", c.summary.repeatability)
+                                 : "—",
+                                 unit: c.summary.struckSwings.count > 1 ? "%" : nil)
+                        StatTile("tempo",
+                                 c.summary.meanTempo > 0
+                                 ? String(format: "%.2f", c.summary.meanTempo)
+                                 : "—")
+                    }
+                    .padding(Space.l)
+                    .background(Color.panel, in: RoundedRectangle(cornerRadius: Radius.card))
+
+                    if c.summary.struckSwings.count > 1 {
+                        ChartFrame(title: "every swing, stacked on impact",
+                                   caption: "A tight band means you're repeating.",
+                                   height: 260) {
+                            EnsembleChart(traces: c.summary.struckSwings.map(\.normalizedTrace))
+                        }
+                    }
+                } else {
+                    EmptyState(icon: Icon.paired,
+                               title: "Waiting for your phone",
+                               message: "Start a session from your watch. This screen follows along.")
+                }
+
+                Spacer()
+            }
+            .padding(Space.xl)
+            .frame(maxWidth: 900)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: Space.m) {
+            Circle()
+                .fill(c.isSessionLive ? Color.amber : Color.muted.opacity(0.4))
+                .frame(width: 10, height: 10)
+            Text(c.isSessionLive ? "Session running" : "Not running")
+                .font(.grooveTitle).foregroundStyle(.bone)
+            Spacer()
+            Text("Second screen — nothing to tap here")
+                .font(.grooveCaption).foregroundStyle(.muted)
         }
     }
 }
 
 // MARK: - Shared pieces
-
-struct Card<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-    init(_ title: String, @ViewBuilder content: () -> Content) {
-        self.title = title; self.content = content()
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title.uppercased())
-                .font(.system(size: 9.5, design: .monospaced))
-                .kerning(1.6).foregroundStyle(.muted)
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.panel, in: RoundedRectangle(cornerRadius: 15))
-    }
-}
-
-/// Sample data must never be mistaken for a real session.
-struct DemoBanner: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "eye").font(.system(size: 12))
-            Text("Sample data — not your swings")
-                .font(.system(size: 11, design: .monospaced))
-        }
-        .foregroundStyle(Color.ink)
-        .frame(maxWidth: .infinity).padding(.vertical, 8)
-        .background(Color.amber, in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-struct EmptyState: View {
-    let icon: String, title: String, message: String
-    var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: icon).font(.system(size: 30)).foregroundStyle(.muted)
-            Text(title).font(.system(size: 17, weight: .heavy, design: .rounded))
-            Text(message).font(.footnote).foregroundStyle(.muted)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity).padding(.vertical, 30).padding(.horizontal, 20)
-        .background(Color.panel, in: RoundedRectangle(cornerRadius: 18))
-    }
-}
-
-struct Bullet: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Circle().fill(Color.muted).frame(width: 4, height: 4).padding(.top, 6)
-            Text(text).font(.footnote).foregroundStyle(.muted)
-        }
-    }
-}
-
-struct Stat: View {
-    let k: String, v: String
-    init(_ k: String, _ v: String) { self.k = k; self.v = v }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(k).font(.system(size: 10, design: .monospaced)).foregroundStyle(.muted)
-            Text(v).font(.system(size: 28, weight: .heavy, design: .rounded))
-                .foregroundStyle(Color.bone)
-        }
-    }
-}
-
-struct KV: View {
-    let k: String, v: String; var tint: Color = .bone
-    init(_ k: String, _ v: String, tint: Color = .bone) { self.k = k; self.v = v; self.tint = tint }
-    var body: some View {
-        HStack {
-            Text(k).font(.system(size: 11, design: .monospaced)).foregroundStyle(.muted)
-            Spacer()
-            Text(v).font(.system(size: 12, design: .monospaced)).foregroundStyle(tint)
-        }
-    }
-}
-
-/// Buttons are green; amber means the app is doing something. Crimson is reserved
-/// for destructive only — it never doubles as a recording indicator.
-struct Primary: ButtonStyle {
-    var destructive = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 15, weight: .heavy, design: .rounded))
-            .foregroundStyle(Color.cream)
-            .frame(maxWidth: .infinity).padding(13)
-            .background(destructive ? Color.crimson : Color.fairway,
-                        in: RoundedRectangle(cornerRadius: 12))
-            .opacity(configuration.isPressed ? 0.8 : 1)
-    }
-}
 
 struct UndoToast: View {
     @ObservedObject var c: PhoneController
@@ -572,15 +657,15 @@ struct UndoToast: View {
 
     var body: some View {
         HStack {
-            Text("Swing removed").font(.footnote)
+            Text("Swing removed").font(.grooveCallout)
             Spacer()
             Button("Undo") { c.undoDelete() }
-                .font(.footnote.bold()).tint(.turf)
+                .font(.grooveCallout.weight(.bold)).tint(.turf)
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.horizontal, Space.l).padding(.vertical, Space.m)
         .background(Color.panel, in: Capsule())
         .overlay(Capsule().stroke(Color.muted.opacity(0.3), lineWidth: 1))
-        .padding(.horizontal, 20).padding(.bottom, 60)
+        .padding(.horizontal, Space.xl).padding(.bottom, 60)
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .task {
             try? await Task.sleep(for: .seconds(6))

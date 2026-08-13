@@ -18,16 +18,16 @@ enum Sensitivity: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .eager:    return "Ducks more often"
+        case .eager:    return "More often"
         case .balanced: return "Balanced"
-        case .strict:   return "Only when certain"
+        case .strict:   return "Only when sure"
         }
     }
     var detail: String {
         switch self {
-        case .eager:    return "Catches every shot. Occasionally dips during a rehearsal."
-        case .balanced: return "The default. Rarely wrong either way."
-        case .strict:   return "Never dips on a rehearsal. Will miss the odd shot."
+        case .eager:    return "Catches every shot, but your music will sometimes dip during a practice swing."
+        case .balanced: return "The usual choice. Rarely wrong either way."
+        case .strict:   return "Never dips on a practice swing, but it'll miss the occasional shot."
         }
     }
     var threshold: Double {
@@ -190,13 +190,20 @@ struct SessionSummary {
     var repeatabilityVerdict: String {
         switch repeatability {
         case 0:        return "Not enough swings yet."
-        case ..<3.5:   return "Very tight — you're repeating."
-        case ..<5:     return "Tight. This is the range you want."
-        case ..<8:     return "Loose. Something's moving between swings."
-        default:       return "Not repeating yet."
+        case ..<3.5:   return "Very consistent — you're repeating the same swing."
+        case ..<5:     return "Consistent. This is where you want to be."
+        case ..<8:     return "A bit loose. Something is changing between swings."
+        default:       return "Every swing is different right now."
         }
     }
 
+    /// Average milliseconds by which the hips led the hands, across the swings
+    /// that carried a phone. Nil when the phone wasn't in a pocket.
+    var meanPelvisLead: Double? {
+        let v = struckSwings.compactMap(\.metrics.pelvisLeadMs)
+        guard !v.isEmpty else { return nil }
+        return v.reduce(0, +) / Double(v.count)
+    }
 }
 
 // MARK: - Sessions
@@ -236,11 +243,11 @@ struct CalibrationResult {
     var isReady: Bool { realCount >= 8 && rehearsalCount >= 8 && separation > 0.18 }
 
     var verdict: String {
-        if realCount < 8 || rehearsalCount < 8 { return "Keep going." }
+        if realCount < 8 || rehearsalCount < 8 { return "Keep going — a few more of each." }
         switch separation {
-        case ..<0.10: return "Your rehearsals look almost identical to your shots. The detector will guess. Try Only when certain, or use the watch to arm it yourself."
-        case ..<0.18: return "Workable but close. Start on Only when certain and loosen it later."
-        default:      return "Clean separation. Your routine is distinctive enough to trust."
+        case ..<0.10: return "Your practice swings look almost exactly like your real ones, so it will guess sometimes. Try \"Only when sure\"."
+        case ..<0.18: return "Close, but workable. Start on \"Only when sure\" and loosen it once you trust it."
+        default:      return "It can tell your real swings from your practice ones clearly."
         }
     }
 }

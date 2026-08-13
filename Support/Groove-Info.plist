@@ -29,6 +29,16 @@
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 
+	<!-- iPad runs the read-only second screen, which sits on a bag or bench and
+	     is read from across a few feet, so it takes any orientation. -->
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+
 	<!-- Background execution: the silent-audio keepalive in LocalAudioHost
 	     needs the `audio` background mode or iOS suspends the app in a pocket. -->
 	<key>UIBackgroundModes</key>
@@ -37,8 +47,8 @@
 	</array>
 
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Opens your mic for a moment at impact so you hear the ball. Nothing is recorded.</string>
+	<string>Listens for the moment you hit the ball so it can play that sound back to you. Nothing is recorded or kept.</string>
 	<key>NSMotionUsageDescription</key>
-	<string>Reads rotation from your pocket to measure how your swing sequences.</string>
+	<string>Feels your hips turn from your pocket, so it can tell you whether they lead your hands.</string>
 </dict>
 </plist>

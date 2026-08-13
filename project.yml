@@ -34,7 +34,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.connor.groove
         INFOPLIST_FILE: Support/Groove-Info.plist
         GENERATE_INFOPLIST_FILE: NO
-        TARGETED_DEVICE_FAMILY: "1"
+        # 1,2 = iPhone and iPad. The iPad build runs the read-only second
+        # screen (PairedDeviceView), not the tab bar.
+        TARGETED_DEVICE_FAMILY: "1,2"
         ENABLE_PREVIEWS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:

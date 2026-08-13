@@ -66,7 +66,7 @@ final class Permissions: ObservableObject {
 
 // MARK: - Preflight UI
 
-/// Shown during onboarding and again on the Range tab if anything regresses.
+/// Shown during onboarding and again on Today if anything regresses.
 struct PermissionRow: View {
     let title: String
     let detail: String
@@ -74,21 +74,24 @@ struct PermissionRow: View {
     var onFix: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 11) {
+        HStack(alignment: .top, spacing: Space.m) {
             Image(systemName: icon)
                 .foregroundStyle(tint)
                 .font(.system(size: 17))
                 .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 14, weight: .semibold))
-                Text(detail).font(.caption).foregroundStyle(.muted)
+            VStack(alignment: .leading, spacing: Space.xs) {
+                Text(title).font(.grooveSubhead).foregroundStyle(.bone)
+                Text(detail).font(.grooveCaption).foregroundStyle(.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+            Spacer(minLength: Space.s)
             if state == .denied, let onFix {
-                Button("Fix", action: onFix).font(.caption.bold()).tint(.alert)
+                Button("Fix", action: onFix)
+                    .font(.grooveCallout.weight(.bold)).tint(.alert)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Space.xs)
+        .accessibilityElement(children: .combine)
     }
 
     private var icon: String {

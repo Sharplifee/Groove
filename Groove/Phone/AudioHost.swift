@@ -1,88 +1,137 @@
 import Foundation
 import AVFoundation
 
-/// Anything that can duck the player's media and open a live mic.
+/// Anything that can duck the player's media and replay the strike.
 /// The paired-device route would implement this over the network; everything
 /// else stays identical.
 protocol AudioHost: AnyObject {
-    var inputLatency: TimeInterval { get }
     var isArmed: Bool { get }
     var isAlive: Bool { get }
     func startSession() throws
     func arm(preferring route: AudioRoute) throws
-    func duckAndPassthrough()
+    func duckForTakeaway()
+    func fireImpactBurst()
     func restore(afterTail tail: TimeInterval)
     func disarm()
     func endSession()
 }
 
-/// # Why this is two tiers
+/// # Why there is no live passthrough any more
 ///
-/// iOS grants an `audio`-background-mode app continued execution **only while an
-/// audio session is active and producing samples**. Between swings this app has
-/// nothing to play, so a naive design gets suspended within seconds of the phone
-/// going in a pocket — CoreMotion stops, `sendMessage` stops arriving, and the
-/// duck never fires again after the first shot. An earlier version of this file
-/// also called `setActive(false)` on every disarm, which guaranteed it.
+/// The old design opened the mic and streamed room audio to the earbuds for the
+/// duration of a swing. Two things were wrong with that, and only one of them
+/// was a settings problem.
 ///
-/// So the session is never fully torn down mid-round. Instead:
+/// **The music quality.** Asking for `.allowBluetooth` alongside `.playAndRecord`
+/// makes iOS negotiate HFP so it can reach the earbud microphone — mono, 8-16 kHz,
+/// for as long as the session is armed. That is what made a podcast sound thin.
+/// The fix is to never ask for it: `.allowBluetoothA2DP` keeps output on full
+/// stereo, and input comes from the phone's own mic, which is what a pocketed
+/// phone was going to use anyway.
 ///
-/// - **Keepalive tier** (`.playback`, silent source node) runs for the whole
-///   range session. It holds background execution open. No input node, so
-///   Bluetooth earbuds stay on A2DP and your podcast keeps full fidelity.
-/// - **Armed tier** (`.playAndRecord`) is switched into only around a swing.
-///   That's what enables the mic, and what forces HFP — so it lives for about
-///   four seconds and switches back.
+/// **The echo.** That one is not tunable. Bluetooth output latency runs
+/// 150-250 ms, so a streamed copy of the strike always arrives well after the
+/// real strike the player already heard through the earbud seal. Two of the same
+/// transient offset by a fifth of a second is a slapback, and no amount of gain
+/// shaping removes it.
 ///
-/// Changing category on an already-active session keeps execution unbroken;
-/// `setActive(false)` is called exactly once, at `endSession()`.
+/// So nothing is streamed. A rolling buffer is always capturing but never
+/// audible; at impact the transient is sliced out and played back exactly once.
+/// A single burst has nothing to beat against, so there is no echo.
+///
+/// # Why there is only one tier now
+///
+/// The previous two-tier design — silent `.playback` between swings, switching
+/// up to `.playAndRecord` around each one — existed solely because the record
+/// tier forced HFP and had to be kept short. Without `.allowBluetooth` that
+/// penalty is gone, so the session stays in `.playAndRecord` for the whole
+/// round and there is no category-switch window for a fast second shot to land
+/// in.
+///
+/// The silent source node is unchanged and load-bearing: iOS grants an
+/// `audio`-background-mode app continued execution only while a session is
+/// active and producing samples, and between swings this app has nothing to
+/// play. `setActive(false)` is called in exactly one place, `endSession()`.
 final class LocalAudioHost: NSObject, AudioHost {
 
+    // MARK: Burst shape - tune these at the range.
+
+    /// How much of the transient to replay.
+    static var burstWindow: TimeInterval = 0.130
+    /// Captured before the detected impact, so the burst opens with the club
+    /// arriving rather than starting halfway through the crack.
+    static var burstPreRoll: TimeInterval = 0.018
+    /// Slice edges click without these.
+    static var burstFade: TimeInterval = 0.006
+    /// Replay gain. The point is to make the strike unmissable over ducked
+    /// media, not to be loud.
+    static var burstGain: Float = 1.6
+
     private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
     private var silence: AVAudioSourceNode?
-    private var passthroughVolume: Float = 0
     private var restoreWork: DispatchWorkItem?
+
+    /// Always capturing, never routed to the output. This is the only thing the
+    /// microphone is used for, and nothing is written to disk.
+    private var ring: [Float] = []
+    private var ringWrite = 0
+    private var ringFilled = false
+    private var ringRate: Double = 48_000
+    private let ringSeconds: Double = 2.0
+    private let ringLock = NSLock()
 
     private(set) var isArmed = false
     private(set) var isAlive = false
-    private var isPassingThrough = false
-
-    var inputLatency: TimeInterval {
-        AVAudioSession.sharedInstance().inputLatency
-            + AVAudioSession.sharedInstance().outputLatency
-    }
+    private var isDucked = false
 
     var currentInputName: String {
         AVAudioSession.sharedInstance().currentRoute.inputs.first?.portName ?? "None"
     }
 
-    /// Any brand of earbud exposes a mic here — Bluetooth HFP, wired, USB-C.
-    var availableInputs: [AVAudioSessionPortDescription] {
-        AVAudioSession.sharedInstance().availableInputs ?? []
+    var currentOutputName: String {
+        AVAudioSession.sharedInstance().currentRoute.outputs.first?.portName ?? "None"
     }
 
-    // MARK: - Keepalive tier
+    /// True while the route is still a full-fidelity stereo link. If this ever
+    /// goes false mid-session the option set is wrong - HFP has been negotiated
+    /// and the player's music has just been degraded.
+    var outputIsHighFidelity: Bool {
+        let outs = AVAudioSession.sharedInstance().currentRoute.outputs
+        return !outs.contains { $0.portType == .bluetoothHFP }
+    }
+
+    // MARK: - Session
+
+    private var baseOptions: AVAudioSession.CategoryOptions {
+        // `.allowBluetooth` is deliberately absent and must stay absent - it is
+        // what negotiates HFP and collapses the player's music to mono.
+        [.allowBluetoothA2DP, .mixWithOthers, .defaultToSpeaker]
+    }
 
     /// Called once when the range session starts and held until it ends.
     func startSession() throws {
         guard !isAlive else { return }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .default,
-                                options: [.mixWithOthers])
+        try session.setCategory(.playAndRecord, mode: .default, options: baseOptions)
         try session.setActive(true)
 
-        let format = engine.outputNode.inputFormat(forBus: 0)
+        let outFormat = engine.outputNode.inputFormat(forBus: 0)
+
+        // Genuine silence, not low volume - iOS counts an active session
+        // producing samples, and this costs effectively nothing.
         let node = AVAudioSourceNode { _, _, _, audioBufferList in
-            // Genuine silence, not low volume — iOS counts an active session
-            // producing samples, and this costs effectively nothing.
             for buffer in UnsafeMutableAudioBufferListPointer(audioBufferList) {
                 memset(buffer.mData, 0, Int(buffer.mDataByteSize))
             }
             return noErr
         }
         engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        engine.mainMixerNode.outputVolume = 0
+        engine.connect(node, to: engine.mainMixerNode, format: outFormat)
+
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: nil)
+
         engine.prepare()
         try engine.start()
 
@@ -97,11 +146,13 @@ final class LocalAudioHost: NSObject, AudioHost {
     /// The only place the session is deactivated.
     func endSession() {
         restoreWork?.cancel()
-        disarmInputOnly()
+        stopCapture()
+        player.stop()
         engine.stop()
         if let silence { engine.detach(silence) }
         silence = nil
         isAlive = false
+        isDucked = false
         NotificationCenter.default.removeObserver(self)
         try? AVAudioSession.sharedInstance()
             .setActive(false, options: [.notifyOthersOnDeactivation])
@@ -116,118 +167,153 @@ final class LocalAudioHost: NSObject, AudioHost {
         case .began:
             isArmed = false
         case .ended:
-            try? AVAudioSession.sharedInstance().setActive(true)
+            let session = AVAudioSession.sharedInstance()
+            try? session.setCategory(.playAndRecord, mode: .default, options: baseOptions)
+            try? session.setActive(true)
             if !engine.isRunning { try? engine.start() }
         @unknown default: break
         }
     }
 
-    // MARK: - Armed tier
+    // MARK: - Capture
 
-    /// Switches the live session up to `.playAndRecord`. Category changes on an
-    /// active session don't interrupt background execution; deactivating would.
+    /// Starts the rolling buffer. No category change, no route change, nothing
+    /// audible - the tap exists only so there is something to slice at impact.
     func arm(preferring route: AudioRoute) throws {
+        // Route is no longer used to pick an input. Without `.allowBluetooth`
+        // there is no earbud mic to choose, so capture always comes from the
+        // phone — which is where a pocketed phone was recording from anyway.
+        _ = route
         guard isAlive else { throw AudioError.sessionNotStarted }
         guard !isArmed else { return }
 
-        let session = AVAudioSession.sharedInstance()
-        engine.pause()
-        try session.setCategory(.playAndRecord,
-                                mode: .measurement,
-                                options: [.mixWithOthers, .duckOthers,
-                                          .allowBluetooth, .allowBluetoothA2DP,
-                                          .defaultToSpeaker])
-        try session.setPreferredIOBufferDuration(0.005)
-        try selectInput(for: route)
-
         let input = engine.inputNode
         let format = input.inputFormat(forBus: 0)
-        guard format.sampleRate > 0 else { throw AudioError.noInput }
-        engine.connect(input, to: engine.mainMixerNode, format: format)
-        engine.mainMixerNode.outputVolume = 0        // silent until takeaway
-        if !engine.isRunning { try engine.start() }
+        guard format.sampleRate > 0, format.channelCount > 0 else { throw AudioError.noInput }
+
+        ringLock.lock()
+        ringRate = format.sampleRate
+        ring = [Float](repeating: 0, count: Int(format.sampleRate * ringSeconds))
+        ringWrite = 0
+        ringFilled = false
+        ringLock.unlock()
+
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buf, _ in
+            self?.append(buf)
+        }
         isArmed = true
     }
 
-    func duckAndPassthrough() {
-        guard isArmed else { return }
-        restoreWork?.cancel()
-        isPassingThrough = true
-        ramp(to: 1.0, over: 0.04)
+    private func append(_ buffer: AVAudioPCMBuffer) {
+        guard let channel = buffer.floatChannelData?[0] else { return }
+        let n = Int(buffer.frameLength)
+        ringLock.lock()
+        defer { ringLock.unlock() }
+        guard !ring.isEmpty else { return }
+        for i in 0..<n {
+            ring[ringWrite] = channel[i]
+            ringWrite += 1
+            if ringWrite == ring.count { ringWrite = 0; ringFilled = true }
+        }
     }
 
-    /// Called at impact. The tail is deliberate: coming back exactly at contact
-    /// would step on the strike you opened the mic to hear.
-    func restore(afterTail tail: TimeInterval) {
-        guard isPassingThrough else { return }
-        let work = DispatchWorkItem { [weak self] in
-            self?.ramp(to: 0, over: 0.35)
-            self?.isPassingThrough = false
+    private func stopCapture() {
+        guard isArmed else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        isArmed = false
+    }
+
+    // MARK: - Duck and burst
+
+    /// Takeaway. Adds `.duckOthers` to the live session so the player's media
+    /// drops. Setting the category on an already-active session does not
+    /// interrupt background execution - deactivating would.
+    func duckForTakeaway() {
+        guard isAlive, !isDucked else { return }
+        restoreWork?.cancel()
+        try? AVAudioSession.sharedInstance()
+            .setCategory(.playAndRecord, mode: .default,
+                         options: baseOptions.union(.duckOthers))
+        isDucked = true
+    }
+
+    /// Impact. Slices the transient out of the rolling buffer and plays it once.
+    /// The real strike has already reached the player's ears through the earbud
+    /// seal; this is the amplified copy landing on top of ducked media, not a
+    /// second live feed to beat against it.
+    func fireImpactBurst() {
+        guard isAlive, isArmed else { return }
+
+        ringLock.lock()
+        let rate = ringRate
+        let capacity = ring.count
+        let write = ringWrite
+        let filled = ringFilled
+        guard capacity > 0, filled || write > 0 else { ringLock.unlock(); return }
+
+        let window = Int(rate * Self.burstWindow)
+        let preRoll = Int(rate * Self.burstPreRoll)
+        let available = filled ? capacity : write
+        let count = min(window, available)
+        guard count > 32 else { ringLock.unlock(); return }
+
+        // The tap runs behind real time, so the newest sample sits just before
+        // the write head. Back up by the pre-roll, then take the window.
+        var slice = [Float](repeating: 0, count: count)
+        var read = write - preRoll - count
+        while read < 0 { read += capacity }
+        for i in 0..<count {
+            slice[i] = ring[(read + i) % capacity]
         }
+        ringLock.unlock()
+
+        applyFades(&slice, rate: rate)
+
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format,
+                                            frameCapacity: AVAudioFrameCount(count)),
+              let dst = buffer.floatChannelData?[0] else { return }
+        for i in 0..<count { dst[i] = slice[i] * Self.burstGain }
+        buffer.frameLength = AVAudioFrameCount(count)
+
+        if !player.isPlaying { player.play() }
+        player.scheduleBuffer(buffer, at: nil, options: [], completionHandler: nil)
+    }
+
+    private func applyFades(_ s: inout [Float], rate: Double) {
+        let f = min(Int(rate * Self.burstFade), s.count / 2)
+        guard f > 1 else { return }
+        for i in 0..<f {
+            let g = Float(i) / Float(f)
+            s[i] *= g
+            s[s.count - 1 - i] *= g
+        }
+    }
+
+    /// Called after impact. The tail is deliberate: restoring the media exactly
+    /// at contact would step on the strike the duck existed to expose.
+    func restore(afterTail tail: TimeInterval) {
+        guard isDucked else { return }
+        let work = DispatchWorkItem { [weak self] in self?.unduck() }
         restoreWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + tail, execute: work)
     }
 
-    /// Drops back to the keepalive tier. Crucially does NOT deactivate the
-    /// session — the app must stay alive between swings.
-    func disarm() {
-        guard isArmed else { return }
-        restoreWork?.cancel()
-        disarmInputOnly()
-
+    private func unduck() {
         guard isAlive else { return }
         try? AVAudioSession.sharedInstance()
-            .setCategory(.playback, mode: .default, options: [.mixWithOthers])
-        if !engine.isRunning { try? engine.start() }
+            .setCategory(.playAndRecord, mode: .default, options: baseOptions)
+        isDucked = false
     }
 
-    private func disarmInputOnly() {
-        if isArmed {
-            engine.pause()
-            engine.disconnectNodeOutput(engine.inputNode)
-        }
-        engine.mainMixerNode.outputVolume = 0
-        isArmed = false
-        isPassingThrough = false
-    }
-
-    // MARK: - Route selection
-
-    private func selectInput(for route: AudioRoute) throws {
-        let session = AVAudioSession.sharedInstance()
-        guard let inputs = session.availableInputs, !inputs.isEmpty else { return }
-
-        let earbudTypes: [AVAudioSession.Port] = [.bluetoothHFP, .headsetMic, .usbAudio]
-        let wanted: AVAudioSessionPortDescription?
-        switch route {
-        case .earbuds:
-            wanted = inputs.first { earbudTypes.contains($0.portType) }
-                  ?? inputs.first { $0.portType == .builtInMic }
-        case .phoneMic, .pairedDevice:
-            wanted = inputs.first { $0.portType == .builtInMic }
-        }
-        if let wanted { try session.setPreferredInput(wanted) }
-    }
-
-    func routeUnavailable(_ route: AudioRoute) -> Bool {
-        guard route == .earbuds else { return false }
-        let inputs = AVAudioSession.sharedInstance().availableInputs ?? []
-        return !inputs.contains {
-            [.bluetoothHFP, .headsetMic, .usbAudio].contains($0.portType)
-        }
-    }
-
-    // MARK: - Envelope
-
-    private func ramp(to target: Float, over duration: TimeInterval) {
-        let steps = max(1, Int(duration / 0.01))
-        let start = engine.mainMixerNode.outputVolume
-        for s in 0...steps {
-            let f = Float(s) / Float(steps)
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(s) * 0.01) { [weak self] in
-                self?.engine.mainMixerNode.outputVolume = start + (target - start) * f
-            }
-        }
+    /// Stops capturing between swings. Crucially does NOT deactivate the
+    /// session - the app must stay alive in the pocket.
+    func disarm() {
+        restoreWork?.cancel()
+        unduck()
+        stopCapture()
+        if isAlive, !engine.isRunning { try? engine.start() }
     }
 
     enum AudioError: LocalizedError {
@@ -235,7 +321,7 @@ final class LocalAudioHost: NSObject, AudioHost {
         var errorDescription: String? {
             switch self {
             case .sessionNotStarted: return "Audio session isn't running."
-            case .noInput:           return "No microphone is available on this route."
+            case .noInput:           return "No microphone is available."
             }
         }
     }

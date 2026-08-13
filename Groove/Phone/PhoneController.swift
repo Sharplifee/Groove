@@ -25,17 +25,28 @@ final class PhoneController: NSObject, ObservableObject {
     @Published var nowPlaying = "—"
     @Published var status = "Ready"
 
-    enum AudioState: String { case full = "full volume", ducked = "ducked · mic open" }
+    enum AudioState: String { case full = "full volume", ducked = "music ducked" }
 
     let permissions = Permissions()
 
-    /// Demo mode shows generated swings on every screen so the layout can be
-    /// seen populated without hitting balls. Held in memory only. No longer
-    /// reachable from the UI — kept because the #Previews in DemoData depend on it.
-    @Published var isDemoMode = false
-    /// Published so the real-swing count on Setup refreshes if a genuine swing
-    /// lands while sample data is on screen.
+    /// A worked example, shown on every screen so a new player can see what
+    /// their own session will look like before they've hit anything. Held in
+    /// memory only and never written to disk.
+    ///
+    /// This is ON by default on a fresh install and switches itself off the
+    /// moment a real swing lands. Opening the app to three empty screens was
+    /// the single most-repeated complaint, and a toggle buried in Setup does
+    /// not fix that — a first-run default does.
+    @Published var isShowingExample = false
+    /// The real swings sitting behind the example, so a genuine swing arriving
+    /// mid-example is never lost.
     @Published var realSwingsBackup: [Swing]?
+
+    /// Always the count of real swings, whatever is on screen.
+    var realSwingCount: Int { realSwingsBackup?.count ?? swings.count }
+
+    /// iPad runs the read-only second screen instead of the tab bar.
+    var isPadLayout: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
     /// Appearance. Phone-local and deliberately outside `Config`, so changing it
     /// never pushes a new application context to the watch. See Theme.swift.
@@ -46,10 +57,20 @@ final class PhoneController: NSObject, ObservableObject {
         }
     }
 
+    /// The green header band. Separate from the palette — it used to be a third
+    /// theme that differed from the second in nothing else.
+    @Published var showsBand: Bool = Theme.storedBand {
+        didSet {
+            Palette.showsBand = showsBand
+            Theme.storeBand(showsBand)
+        }
+    }
+
     /// Preview/demo constructor — no WCSession, no audio, no motion.
     static func preview(swings: [Swing]) -> PhoneController {
         let c = PhoneController(previewing: true)
         c.swings = swings
+        c.isShowingExample = false
         c.config.hasOnboarded = true
         c.config.hasCalibrated = true
         return c
@@ -103,6 +124,13 @@ final class PhoneController: NSObject, ObservableObject {
         super.init()
         guard !previewing else { return }
         swings = store.load()
+        // Fresh install, or a player who hasn't logged a session yet: show the
+        // worked example rather than three empty screens.
+        if swings.isEmpty {
+            realSwingsBackup = []
+            swings = DemoData.exampleSwings()
+            isShowingExample = true
+        }
         if WCSession.isSupported() {
             WCSession.default.delegate = self
             WCSession.default.activate()
@@ -110,8 +138,10 @@ final class PhoneController: NSObject, ObservableObject {
     }
 
     var inputName: String { audio.currentInputName }
-    var measuredLatency: TimeInterval { audio.inputLatency }
-    var routeUnavailable: Bool { audio.routeUnavailable(config.route) }
+    var outputName: String { audio.currentOutputName }
+    /// False means HFP has been negotiated and the player's music has just been
+    /// degraded — which should now be impossible, so it is worth surfacing.
+    var outputIsHighFidelity: Bool { audio.outputIsHighFidelity }
     var backgroundAudioAlive: Bool { audio.isAlive }
 
     /// Opens a fresh calibration window so results measure the new reps only.
@@ -190,10 +220,13 @@ final class PhoneController: NSObject, ObservableObject {
             catch { status = "Couldn't open the mic: \(error.localizedDescription)" }
 
         case "takeaway":
-            audio.duckAndPassthrough()
+            audio.duckForTakeaway()
             audioState = .ducked
 
         case "impact":
+            // The player has already heard the real strike through the earbud
+            // seal. This is the amplified copy landing on top of ducked media.
+            audio.fireImpactBurst()
             audio.restore(afterTail: config.tailSeconds)
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(config.tailSeconds))
@@ -205,9 +238,9 @@ final class PhoneController: NSObject, ObservableObject {
             pendingPelvisLead = pelvisLeadMs()
             pendingPelvisAt = Date()
 
-            // Tear the record session down once the tail is done. Leaving it open
-            // pins Bluetooth earbuds to HFP — mono, 8-16 kHz — for the rest of
-            // the session, which is exactly what scoping it was meant to avoid.
+            // Stop the rolling buffer once the tail is done. There is no HFP
+            // penalty any more, so this is just housekeeping rather than the
+            // load-bearing teardown it used to be.
             scheduleDisarm(after: config.tailSeconds + 0.6)
 
         case "restore":
@@ -219,8 +252,8 @@ final class PhoneController: NSObject, ObservableObject {
         case "disarm":
             audio.restore(afterTail: 0)
             audioState = .full
-            // Drops to the keepalive tier only — never deactivates the session,
-            // or the app dies in the pocket.
+            // Stops capture only — never deactivates the session, or the app
+            // dies in the pocket.
             audio.disarm()
 
         case "sessionStart":
@@ -259,9 +292,12 @@ final class PhoneController: NSObject, ObservableObject {
         // real set behind it — appending here would put it in the fake list and
         // persist() would then refuse to write it, losing it for good. The watch
         // has already been acked by this point, so nothing else holds a copy.
-        if isDemoMode {
+        if isShowingExample {
+            // A real swing has arrived, so the example has served its purpose.
+            // Fold it away and show the player their own session instead.
             realSwingsBackup?.insert(swing, at: 0)
             if let real = realSwingsBackup { store.save(real) }
+            setExampleMode(false)
         } else {
             swings.insert(swing, at: 0)
             persist()
@@ -288,8 +324,8 @@ final class PhoneController: NSObject, ObservableObject {
     /// Writes the full swing history to a file for the share sheet. Raw traces
     /// included — there was no way to get data out of the app at all before this.
     func exportURL() -> URL? {
-        // Never export generated data under a filename that reads as real.
-        guard !isDemoMode else { return nil }
+        // Never export made-up data under a filename that reads as real.
+        guard !isShowingExample else { return nil }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -305,8 +341,25 @@ final class PhoneController: NSObject, ObservableObject {
     /// Guards every write path — generated swings must never reach the store or
     /// they'd contaminate a real baseline.
     private func persist() {
-        guard !isDemoMode else { return }
+        guard !isShowingExample else { return }
         store.save(swings)
+    }
+
+    /// Swaps the worked example in and out. The real swings are parked in
+    /// `realSwingsBackup` while it's on, so nothing made-up can reach the store
+    /// and nothing real can be lost.
+    func setExampleMode(_ on: Bool) {
+        guard on != isShowingExample else { return }
+        if on {
+            realSwingsBackup = swings
+            swings = DemoData.exampleSwings()
+            isShowingExample = true
+        } else {
+            isShowingExample = false
+            swings = realSwingsBackup ?? []
+            realSwingsBackup = nil
+            persist()
+        }
     }
 
     func delete(_ swing: Swing) {

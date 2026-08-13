@@ -1,12 +1,16 @@
 import Foundation
 import SwiftUI
 
-/// Realistic fake swings so every screen can be seen populated — in the Xcode
-/// canvas, and on device via the Demo toggle in Setup.
+/// A worked example session — realistic enough that a new player can see
+/// exactly what their own numbers will look like before hitting a ball.
 ///
-/// Nothing here is persisted and nothing reaches `SwingStore`. Demo swings live
-/// only in memory for the life of the toggle, so they can't contaminate a real
-/// baseline or the self-training template.
+/// This is what a fresh install shows. It is not a debugging aid hidden behind
+/// a toggle; opening the app to three empty screens was the complaint, and the
+/// answer is that the app is never empty.
+///
+/// Nothing here is persisted and nothing reaches `SwingStore`. Example swings
+/// live only in memory, so they can't contaminate a real baseline or the
+/// self-training template.
 enum DemoData {
 
     /// Acceleration trace shaped like an actual golf swing: quiet setup, a ramp
@@ -121,43 +125,34 @@ enum DemoData {
         return out.sorted { $0.date > $1.date }
     }
 
-    /// A single tidy session, for previewing the Range tab.
+    /// A single tidy session, for previewing.
     static let oneSession: [Swing] = history(sessions: 1, perSession: 18)
-}
 
-// MARK: - Demo mode
-
-extension PhoneController {
-    /// Swaps the in-memory swing list for generated data so every screen can be
-    /// seen populated. Never written to disk; toggling off restores the real set.
-    func setDemoMode(_ on: Bool) {
-        if on {
-            if realSwingsBackup == nil { realSwingsBackup = swings }
-            swings = DemoData.history()
-        } else if let restored = realSwingsBackup {
-            swings = restored
-            realSwingsBackup = nil
-        }
-        isDemoMode = on
-    }
+    /// What a fresh install shows: enough history for the trend line and the
+    /// ensemble overlay to both have something to say.
+    static func exampleSwings() -> [Swing] { history(sessions: 4, perSession: 26) }
 }
 
 // MARK: - Previews
 
-#Preview("Range — empty") {
-    RangeView(c: PhoneController.preview(swings: []))
+#Preview("Today — empty") {
+    TodayView(c: PhoneController.preview(swings: []))
 }
 
-#Preview("Range — after a session") {
-    RangeView(c: PhoneController.preview(swings: DemoData.oneSession))
+#Preview("Today — after a session") {
+    TodayView(c: PhoneController.preview(swings: DemoData.history(sessions: 4, perSession: 20)))
 }
 
-#Preview("Profile — populated") {
-    ProfileView(c: PhoneController.preview(swings: DemoData.history()))
+#Preview("Form — populated") {
+    FormView(c: PhoneController.preview(swings: DemoData.history()))
 }
 
-#Preview("Profile — empty") {
-    ProfileView(c: PhoneController.preview(swings: []))
+#Preview("Form — empty") {
+    FormView(c: PhoneController.preview(swings: []))
+}
+
+#Preview("Paired device") {
+    PairedDeviceView(c: PhoneController.preview(swings: DemoData.oneSession))
 }
 
 #Preview("Setup") {

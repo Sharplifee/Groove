@@ -22,10 +22,10 @@ struct WatchRootView: View {
 
     private var sub: String {
         switch c.state {
-        case .armed:      return String(format: "routine matched · %.2f", c.armConfidence)
-        case .swinging:   return "audio ducked"
+        case .armed:      return "ready"
+        case .swinging:   return "music down"
         case .recovering: return "logging"
-        default:          return c.isRunning ? "audio untouched" : "not running"
+        default:          return c.isRunning ? "music untouched" : "not running"
         }
     }
 
@@ -47,9 +47,9 @@ struct WatchRootView: View {
             Text(sub).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
 
             // Without the phone app alive, events queue instead of firing and
-            // the duck silently never happens. Say so rather than pretend.
+            // the music never drops. Say so rather than pretend.
             if c.isRunning && !c.phoneReady {
-                Text("Open Groove on your phone")
+                Text("Phone not responding")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange)
             }
@@ -67,14 +67,14 @@ struct WatchRootView: View {
 
             Spacer(minLength: 4)
 
-            // Swings and tempo are what he's here for. Rehearsal count is a
-            // diagnostic, so it sits small and last.
+            // Swings and tempo are what you are here for. Practice-swing count is
+            // a diagnostic, so it sits small and last.
             HStack {
                 stat("swings", "\(c.struckCount)")
                 Spacer()
                 stat("tempo", c.lastTempo > 0 ? String(format: "%.1f", c.lastTempo) : "—")
             }
-            Text("\(c.rehearsalCount) rehearsals")
+            Text("\(c.rehearsalCount) practice swings")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
 
@@ -104,12 +104,12 @@ struct GrooveWatchApp: App {
 
 // MARK: - Previews
 //
-// The watch is the only live surface, so these three are what actually matters
-// to look at — the phone screens are all read-after-the-fact.
+// The watch is the only live surface, so these are what actually matter to look
+// at — the phone screens are all read-after-the-fact.
 
 #Preview("Watching") { WatchPreview(state: .watching, running: true) }
 #Preview("Set") { WatchPreview(state: .armed, running: true) }
-#Preview("Swing — audio ducked") { WatchPreview(state: .swinging, running: true) }
+#Preview("Swing — music down") { WatchPreview(state: .swinging, running: true) }
 #Preview("Idle — not started") { WatchPreview(state: .watching, running: false) }
 #Preview("Phone unreachable") { WatchPreview(state: .watching, running: true, phone: false) }
 
@@ -138,10 +138,10 @@ struct WatchPreview: View {
     }
     private var sub: String {
         switch state {
-        case .armed: return "routine matched · 0.91"
-        case .swinging: return "audio ducked"
+        case .armed: return "ready"
+        case .swinging: return "music down"
         case .recovering: return "logging"
-        default: return running ? "audio untouched" : "not running"
+        default: return running ? "music untouched" : "not running"
         }
     }
 
@@ -156,7 +156,7 @@ struct WatchPreview: View {
                 .foregroundStyle(accent)
             Text(sub).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             if running && !phone {
-                Text("Open Groove on your phone")
+                Text("Phone not responding")
                     .font(.system(size: 10)).foregroundStyle(.orange)
             }
             if unsent > 0 {
@@ -169,7 +169,7 @@ struct WatchPreview: View {
                 Spacer()
                 stat("tempo", "3.0")
             }
-            Text("41 rehearsals").font(.system(size: 9)).foregroundStyle(.secondary)
+            Text("41 practice swings").font(.system(size: 9)).foregroundStyle(.secondary)
             Button { } label: {
                 Text(running ? "End" : "Start").frame(maxWidth: .infinity)
             }
