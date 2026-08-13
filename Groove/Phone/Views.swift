@@ -523,10 +523,12 @@ struct SetupView: View {
             .pickerStyle(.segmented)
             Note(c.theme.blurb)
 
-            Toggle("Green bar across the top", isOn: Binding(get: { c.showsBand },
-                                                             set: { c.showsBand = $0 }))
-                .font(.grooveSubhead)
-                .tint(.fairway)
+            if !c.theme.bandIsFixed {
+                Toggle("Coloured bar across the top",
+                       isOn: Binding(get: { c.showsBand }, set: { c.showsBand = $0 }))
+                    .font(.grooveSubhead)
+                    .tint(.fairway)
+            }
         }
     }
 

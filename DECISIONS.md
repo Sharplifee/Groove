@@ -75,3 +75,13 @@ syntax-checks every file; `Tests/run-checks.sh` builds and runs 31 assertions
 against the shared logic and the example data. Neither needs Xcode, a simulator
 or a device, so they run anywhere — including the machine that can't build the
 app.
+
+**10 — Augusta restored; Clubhouse is the one that changed.** Decision 4 read
+"collapse the theme count" and cut Augusta entirely. That was the wrong reading
+of the instruction, which was to *leave Augusta alone* and give Clubhouse a
+contrasting colour. Corrected: Augusta is unchanged — green lead, green band,
+fixed. Clubhouse keeps the same cream ground but swaps its lead and second
+colours, so slate blue carries everything green used to. Primary buttons follow
+the theme's lead colour rather than always being Augusta green, otherwise every
+action on the screen would still read as Augusta whichever theme you picked.
+The band toggle now only appears on the two themes that don't wear one already.

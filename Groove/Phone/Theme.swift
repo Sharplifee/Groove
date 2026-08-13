@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// Two palettes, and a separate switch for the green header band.
+/// Three palettes, and they are now actually three.
 ///
-/// There used to be three cases. `augusta` was `clubhouse` plus a nav bar, which
-/// is why the two read as identical on device — they were, everywhere except the
-/// top forty points of the screen. Presenting a variant as a peer of a real
-/// palette is what made the choice feel empty, so the band is now its own toggle
-/// and the light theme got a genuine second accent instead.
+/// `augusta` and `clubhouse` used to be the same tokens with a nav bar bolted on
+/// one of them, which is why they read as identical everywhere except the top
+/// forty points of the screen. Augusta is unchanged — green-led, cream ground,
+/// green band. Clubhouse is the one that moved: same cream ground, but slate
+/// blue carries the accents instead of green, so the two are distinguishable at
+/// a glance rather than by hunting for the difference.
 ///
 /// Theme is display state, not behaviour, so it deliberately does **not** live in
 /// `Config` and never touches `ConfigSync`. `ConfigSync.push` fires on every
@@ -17,8 +18,9 @@ import SwiftUI
 /// exists because the watch was silently running on default *settings*; a
 /// phone-local appearance choice isn't that.
 enum Theme: String, CaseIterable, Identifiable {
-    case pines      // dark — evening under the pines
-    case clubhouse  // light — cream, white, slate blue
+    case pines      // dark  — evening under the pines
+    case clubhouse  // light — cream ground, slate blue accents
+    case augusta    // light — cream ground, green accents, green band
 
     var id: String { rawValue }
 
@@ -26,17 +28,21 @@ enum Theme: String, CaseIterable, Identifiable {
         switch self {
         case .pines:     return "Pines"
         case .clubhouse: return "Clubhouse"
+        case .augusta:   return "Augusta"
         }
     }
 
     var blurb: String {
         switch self {
         case .pines:     return "Deep green, warm cream text. Easiest on the eyes at dusk."
-        case .clubhouse: return "Cream page, white cards, slate blue accents. Most readable in daylight."
+        case .clubhouse: return "Cream page, white cards, slate blue throughout. Cooler and quieter."
+        case .augusta:   return "Cream page, Augusta green throughout, green bar across the top."
         }
     }
 
-    var isLight: Bool { self == .clubhouse }
+    var isLight: Bool { self != .pines }
+    /// Augusta wears the band as part of its identity. The other two can opt in.
+    var bandIsFixed: Bool { self == .augusta }
     var colorScheme: ColorScheme { isLight ? .light : .dark }
 
     // MARK: Tokens
@@ -69,16 +75,23 @@ enum Theme: String, CaseIterable, Identifiable {
     /// New Growth is 8.8:1 on pine but only 1.4:1 on cream, so the light theme
     /// takes Augusta Green here instead.
     var turf: Color {
-        isLight ? Color(red: 0.000, green: 0.404, blue: 0.278)   // Augusta Green
-                : Color(red: 0.753, green: 0.863, blue: 0.561)   // New Growth
+        switch self {
+        case .pines:     return Color(red: 0.753, green: 0.863, blue: 0.561)  // New Growth
+        case .augusta:   return Color(red: 0.000, green: 0.404, blue: 0.278)  // Augusta Green
+        case .clubhouse: return Color(red: 0.161, green: 0.322, blue: 0.451)  // Slate Blue, deep
+        }
     }
-    /// The contrasting third colour. Cool against cream and green — it reads as
-    /// a different family without shouting, which is the whole point. Carries
-    /// non-positive emphasis: selected state, chart reference lines, the "this
-    /// is an example" marker.
+    /// The second colour, whichever way round the theme runs it. In Augusta the
+    /// lead is green and this is slate blue; in Clubhouse they swap, which is
+    /// what finally makes the two light themes tell apart at a glance. Carries
+    /// non-positive emphasis: chart reference lines, the "this is an example"
+    /// marker.
     var accent: Color {
-        isLight ? Color(red: 0.278, green: 0.408, blue: 0.522)   // Slate Blue
-                : Color(red: 0.576, green: 0.702, blue: 0.796)   // Slate Blue, lifted
+        switch self {
+        case .pines:     return Color(red: 0.576, green: 0.702, blue: 0.796)  // Slate Blue, lifted
+        case .augusta:   return Color(red: 0.278, green: 0.408, blue: 0.522)  // Slate Blue
+        case .clubhouse: return Color(red: 0.000, green: 0.404, blue: 0.278)  // Augusta Green
+        }
     }
     /// Masters Yellow. Fills only — dots, banners, page indicators — where it
     /// sits as a shape beside text rather than carrying meaning as text itself.
@@ -92,8 +105,11 @@ enum Theme: String, CaseIterable, Identifiable {
     /// The swing trace on the ensemble chart — a thin line, so it needs to hold
     /// up against the ground on its own.
     var trace: Color {
-        isLight ? Color(red: 0.000, green: 0.404, blue: 0.278)   // Augusta Green
-                : Color(red: 0.988, green: 0.890, blue: 0.000)   // Masters Yellow
+        switch self {
+        case .pines:     return Color(red: 0.988, green: 0.890, blue: 0.000)  // Masters Yellow
+        case .augusta:   return Color(red: 0.000, green: 0.404, blue: 0.278)  // Augusta Green
+        case .clubhouse: return Color(red: 0.161, green: 0.322, blue: 0.451)  // Slate Blue, deep
+        }
     }
 
     // MARK: Persistence — phone-local, deliberately outside Config.
@@ -140,10 +156,14 @@ extension ShapeStyle where Self == Color {
     static var alert:  Color { Palette.theme.alert }
     static var trace:  Color { Palette.theme.trace }
 
-    /// Constant across themes — these are always used as a fill, or as text on
-    /// top of one, so they don't move with the ground.
-    /// Augusta Green — filled buttons and active state.
-    static var fairway: Color { Color(red: 0.000, green: 0.404, blue: 0.278) }
+    /// Filled buttons and active state. Follows the theme's lead colour, so a
+    /// Clubhouse button is slate blue and an Augusta one is green — otherwise
+    /// every primary action would still read as Augusta whatever you picked.
+    static var fairway: Color {
+        Palette.theme == .clubhouse
+            ? Color(red: 0.161, green: 0.322, blue: 0.451)   // Slate Blue, deep
+            : Color(red: 0.000, green: 0.404, blue: 0.278)   // Augusta Green
+    }
     /// Crimson — destructive fills.
     static var crimson: Color { Color(red: 0.729, green: 0.047, blue: 0.184) }
     /// Label colour on a green, crimson or slate fill, in every theme.
@@ -155,8 +175,8 @@ extension ShapeStyle where Self == Color {
 extension View {
     /// Solid green nav bar. Independent of palette now — it's a switch, not a theme.
     @ViewBuilder func themedNavBar() -> some View {
-        if Palette.showsBand {
-            self.toolbarBackground(Color.fairway, for: .navigationBar)
+        if Palette.theme.bandIsFixed || Palette.showsBand {
+            self.toolbarBackground(Palette.theme.turf, for: .navigationBar)
                 .toolbarBackground(.visible, for: .navigationBar)
                 .toolbarColorScheme(.dark, for: .navigationBar)
         } else {
