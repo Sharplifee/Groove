@@ -46,6 +46,13 @@
 		<string>audio</string>
 	</array>
 
+	<!-- Answers Apple's export-compliance question at build time. Without it a
+	     build uploads and validates but is not assignable to a TestFlight group:
+	     "Build is not in an internally testable state." No encryption beyond
+	     what iOS itself provides over HTTPS, so the exemption applies. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Listens for the moment you hit the ball so it can play that sound back to you. Nothing is recorded or kept.</string>
 	<key>NSMotionUsageDescription</key>

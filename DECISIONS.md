@@ -124,3 +124,16 @@ version, so the next SDK floor raise doesn't break the pipeline again.
 **16 — Shipped.** Run 31683442498 archived, signed, exported and uploaded.
 Build 15 processed to VALID on app 6801063220, "GROOVIE Golf". The pipeline is
 end-to-end: push to main, and it reaches TestFlight without a Mac in the loop.
+
+**17 — Internal testing set up, and the reason it wasn't automatic.** Being the
+account holder does not put you on a build. TestFlight needs a beta group, the
+build assigned to it, and export compliance answered. None existed, so the app
+sat in App Store Connect with nothing pointing it at a phone. Created the
+internal group "Connor" (`024e1e84`), added cwsharp23@icloud.com, and assigned
+build 15.
+
+The assignment first returned 422 "Build is not in an internally testable
+state" — that is export compliance, unanswered. Set `usesNonExemptEncryption`
+false on the build, and added `ITSAppUsesNonExemptEncryption` to the Info.plist
+so every future build answers it at compile time and lands in the group without
+anyone touching App Store Connect.
