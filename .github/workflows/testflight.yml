@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
 
     env:
@@ -40,6 +40,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Apple rejects uploads built against anything older than the iOS 26 SDK:
+      # "This app was built with the iOS 18.5 SDK. All iOS and iPadOS apps must
+      # be built with the iOS 26 SDK or later." Pick the newest Xcode present
+      # rather than pinning a version that will age out again.
+      - name: Select newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          NEWEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "using $NEWEST"
+          sudo xcode-select -s "$NEWEST"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i ios || true
 
       - name: Generate project
         run: |
@@ -137,7 +150,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: testflight-logs
-          path: |
-            archive.log
-            build/
-          retention-days: 7
+          path: archive.log
+          retention-days: 3
