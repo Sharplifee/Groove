@@ -148,7 +148,12 @@ final class WatchController: NSObject, ObservableObject {
             status = "Watching"
             // The watch owns the session. The phone mirrors this, never the reverse —
             // it's in a back pocket and can't be the control surface.
-            send(["event": "sessionStart", "sessionID": sessionID.uuidString])
+            // The phone needs the discipline to pick the matching pelvis
+            // threshold. It rides on the session-start event rather than
+            // ConfigSync because it changes per session, not per setup.
+            send(["event": "sessionStart",
+                  "sessionID": sessionID.uuidString,
+                  "discipline": discipline.rawValue])
         } catch {
             status = "Start failed: \(error.localizedDescription)"
         }

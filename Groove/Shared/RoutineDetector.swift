@@ -93,9 +93,9 @@ final class RoutineDetector {
     /// What the player is practising. Set from the watch before a session
     /// starts, and it changes the detector's numbers rather than just a label:
     /// impact threshold, trace window, and whether audio is touched at all.
-    /// A putt crosses 9 g at the wrist where a driver crosses 180, so running
-    /// one discipline's threshold over another's data means the crossing never
-    /// happens and the stroke is never recorded.
+    /// A putt crosses 9 g at the wrist where a full iron crosses 110, so
+    /// running one discipline's threshold over another's data means the
+    /// crossing never happens and the stroke is never recorded.
     var discipline: Discipline = .fullSwing
 
     /// True once this session has seen its first struck ball.

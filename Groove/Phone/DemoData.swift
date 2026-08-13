@@ -76,11 +76,12 @@ enum DemoData {
         // Stroke duration and ratio both move with the discipline. A putting
         // stroke is roughly half the length of a full swing and accelerates
         // through the ball rather than releasing into it, so it sits nearer
-        // 2:1 than 3:1. Generating everything at full-swing timings would make
-        // the putting tab show a player with a driver's tempo on the green.
+        // 2:1 than 3:1. Generating everything at full-swing timings would show
+        // a player putting with an iron's tempo on the green.
         let span: Double = { switch discipline {
             case .fullSwing: return 1.0
             case .chipping:  return 0.72
+            case .pitching:  return 0.6
             case .putting:   return 0.5 } }()
         let ratio = discipline.tempoReference
         let down = 0.26 * span + (rand(2) - 0.5) * 0.04 * looseness
@@ -94,9 +95,11 @@ enum DemoData {
         m.transitionSharpness = 22 + rand(4) * 8
         m.smoothness = 84 + rand(5) * 12 - looseness * 10
         m.peakRotation = 24 + rand(6) * 6
-        // Only a full swing hits hard enough to saturate the watch, and only a
-        // full swing turns the hips enough for the pocket phone to read.
-        m.clipped = discipline == .fullSwing && rand(7) > 0.72
+        // Only a full swing hits hard enough to reach the sensor's limit, and
+        // only a full swing turns the hips enough for the pocket phone to read.
+        // Long irons get there; a full wedge mostly doesn't, which is why this
+        // is occasional rather than typical.
+        m.clipped = discipline.canSaturateSensor && rand(7) > 0.72
         if hasPelvis && discipline.reportsSequencing {
             m.pelvisLeadMs = 28 + (rand(8) - 0.35) * 70
         }
@@ -132,7 +135,7 @@ enum DemoData {
             // Offset the hour per discipline so a chipping session and a full
             // swing session on the same afternoon stay separate sessions rather
             // than merging into one mixed block.
-            let hour = 17 - Discipline.allCases.firstIndex(of: discipline)!
+            let hour = 18 - Discipline.allCases.firstIndex(of: discipline)!
             let start = Calendar.current.date(bySettingHour: hour, minute: 20, second: 0, of: day)!
             // s == 0 is the most recent session, so age scales the older ones up.
             let age = sessions > 1 ? Double(s) / Double(sessions - 1) : 0
@@ -179,6 +182,7 @@ enum DemoData {
     static func exampleSwings() -> [Swing] {
         history(sessions: 4, perSession: 26, improvement: 1.5, discipline: .fullSwing)
         + history(sessions: 2, perSession: 18, improvement: 0.8, discipline: .chipping)
+        + history(sessions: 2, perSession: 16, improvement: 0.9, discipline: .pitching)
         + history(sessions: 2, perSession: 22, improvement: 1.0, discipline: .putting)
     }
 }

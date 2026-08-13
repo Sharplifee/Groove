@@ -10,14 +10,19 @@ enum SwingAnalyzer {
     /// shock of the strike; a phone in a back pocket sees a fraction of it
     /// through the body. Using the wrist number on pelvis data means the
     /// crossing never happens and the metric silently returns nil forever.
-    /// Full-swing defaults. Each discipline overrides these — a putt puts
-    /// roughly a fiftieth of a driver's energy through the wrist, so this
-    /// threshold would never be crossed on a green and the putt would leave no
-    /// trace at all. See `Discipline`.
-    static let wristImpactThreshold: Double = 180
-    static let pelvisImpactThreshold: Double = 35
+    /// Full-swing defaults, calibrated to a **full pitching wedge** rather than
+    /// a driver. A driver sets the floor near the top of the range and drops
+    /// every shorter iron through it; a wedge floor costs nothing at the loud
+    /// end, since a 4-iron or a driver clears it easily.
+    ///
+    /// Each discipline overrides these. A putt puts under a tenth of a full
+    /// iron's energy through the wrist, so this threshold would never be
+    /// crossed on a green and the stroke would leave no trace at all. See
+    /// `Discipline`.
+    static let wristImpactThreshold: Double = 110
+    static let pelvisImpactThreshold: Double = 22
     static let traceLength = 240                // resampled ensemble length
-    static let tracePre: TimeInterval = 1.2     // seconds before impact
+    static let tracePre: TimeInterval = 1.1     // seconds before impact
     static let tracePost: TimeInterval = 0.4
 
     // MARK: - Setup segmentation

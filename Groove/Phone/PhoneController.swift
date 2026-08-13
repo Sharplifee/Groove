@@ -45,6 +45,11 @@ final class PhoneController: NSObject, ObservableObject {
     /// Always the count of real swings, whatever is on screen.
     var realSwingCount: Int { realSwingsBackup?.count ?? swings.count }
 
+    /// Mirrors the discipline the watch is running, so pelvis analysis uses the
+    /// matching threshold. Sent with the session-start event rather than through
+    /// ConfigSync, because it changes per session rather than per setup.
+    @Published var discipline: Discipline = .fullSwing
+
     /// iPad runs the read-only second screen instead of the tab bar.
     var isPadLayout: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
@@ -309,9 +314,11 @@ final class PhoneController: NSObject, ObservableObject {
     /// transient, so no cross-device clock sync is required.
     private func pelvisLeadMs() -> Double? {
         guard config.pocket != .none else { return nil }
+        // Only the full swing turns the hips enough for a pocket phone to read.
+        guard discipline.reportsSequencing else { return nil }
         guard pelvis.count > Int(SwingAnalyzer.fs) else { return nil }
         guard let impact = SwingAnalyzer.impactIndex(
-                pelvis, threshold: SwingAnalyzer.pelvisImpactThreshold) else { return nil }
+                pelvis, threshold: discipline.pelvisImpactThreshold) else { return nil }
         let lo = max(0, impact - Int(1.2 * SwingAnalyzer.fs))
         let window = Array(pelvis[lo..<impact])
         guard let peak = window.enumerated().max(by: {
@@ -412,7 +419,10 @@ extension PhoneController: WCSessionDelegate {
         }
         guard let event = payload["event"] as? String else { return }
         let confidence = payload["confidence"] as? Double ?? 0
+        let sentDiscipline = (payload["discipline"] as? String)
+            .flatMap(Discipline.init(rawValue:))
         Task { @MainActor in
+            if let sentDiscipline { self.discipline = sentDiscipline }
             // Late-join safety net: if we somehow missed sessionStart, a live
             // arm event still brings the phone up.
             if !self.isSessionLive, event == "arm" || event == "takeaway" {

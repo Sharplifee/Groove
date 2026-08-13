@@ -17,9 +17,9 @@ let summary  = SessionSummary(swings: example)
 let full = summary.filtered(to: .fullSwing)
 
 check("example is not empty", !example.isEmpty, "\(example.count) swings")
-check("example spans several sessions", sessions.count == 8, "\(sessions.count) sessions")
-check("all three disciplines are present",
-      summary.disciplinesPresent.count == 3,
+check("example spans several sessions", sessions.count == 10, "\(sessions.count) sessions")
+check("all four disciplines are present",
+      summary.disciplinesPresent.count == 4,
       summary.disciplinesPresent.map(\.label).joined(separator: ", "))
 check("no session mixes disciplines",
       sessions.allSatisfy { s in
@@ -57,6 +57,17 @@ for d in Discipline.allCases {
 }
 
 // Putting must repeat tighter than a full swing, or the scaling is wrong
+// The engine's floor is a full wedge, not a driver. If this ever rises toward
+// driver energy, every shorter iron drops through it and stops being recorded.
+check("full-swing threshold is set at the wedge floor",
+      Discipline.fullSwing.wristImpactThreshold <= 120,
+      "\(Discipline.fullSwing.wristImpactThreshold) — a full PW must clear it")
+check("pitching sits between chipping and putting",
+      Discipline.chipping.wristImpactThreshold > Discipline.pitching.wristImpactThreshold
+      && Discipline.pitching.wristImpactThreshold > Discipline.putting.wristImpactThreshold,
+      "\(Discipline.pitching.wristImpactThreshold)")
+check("only the full swing can reach the sensor's limit",
+      Discipline.allCases.filter(\.canSaturateSensor) == [.fullSwing])
 check("putting repeats tighter than full swing",
       summary.filtered(to: .putting).repeatability < full.repeatability,
       String(format: "%.2f vs %.2f",
@@ -64,8 +75,11 @@ check("putting repeats tighter than full swing",
 
 // Thresholds must descend with strike energy or quiet strokes never register
 check("impact thresholds descend by strike energy",
-      Discipline.fullSwing.wristImpactThreshold > Discipline.chipping.wristImpactThreshold
-      && Discipline.chipping.wristImpactThreshold > Discipline.putting.wristImpactThreshold)
+      zip(Discipline.allCases, Discipline.allCases.dropFirst())
+        .allSatisfy { $0.wristImpactThreshold > $1.wristImpactThreshold })
+check("trace windows shorten with the stroke",
+      zip(Discipline.allCases, Discipline.allCases.dropFirst())
+        .allSatisfy { $0.tracePre >= $1.tracePre })
 check("only the full swing ducks audio",
       Discipline.fullSwing.ducksAudio && Discipline.chipping.ducksAudio
       && !Discipline.putting.ducksAudio)
@@ -139,7 +153,7 @@ check("round trip preserves traces",
 
 // ---- The trend card must have a story, not scatter ----
 // Per discipline, exactly as Today plots it. Mixing them here would compare a
-// putting session against a driver session and mean nothing.
+// putting session against a full-swing session and mean nothing.
 let byAge = RangeSession.group(example)
     .filter { $0.summary.discipline == .fullSwing }
     .sorted { $0.date < $1.date }

@@ -179,3 +179,42 @@ session, the assertion failed on data that was more honest, not less. Replaced
 with a check that the first half averages worse than the second half and that
 the newest session is the best. Direction and endpoint are what the card has to
 communicate; the exact maximum is not.
+
+**21 — The engine is re-baselined on iron play, not the driver.** This is the
+most consequential number in the app and it was set wrong.
+
+Detection thresholds are a floor. A swing registers only if its impact transient
+crosses one, so a floor set by the hardest shot in the bag drops every gentler
+shot through it — not recorded badly, not recorded at all. The driver is the
+outlier: the fastest club, and the only full swing struck off a tee with a
+sweeping blow and no turf. Calibrating to it put the floor near the top of the
+range, where a full pitching wedge — roughly 55-65% of driver clubhead speed —
+sat below the line and vanished.
+
+The reference is now a **full pitching wedge**: the quietest full swing worth
+counting. Wrist threshold 180 → 110, pelvis 35 → 22, pre-impact window 1.2 s →
+1.1 s (an iron swing is marginally shorter). A 4-iron or a driver clears 110
+without difficulty, so nothing is lost at the loud end — a floor set by the
+quietest member of a group costs nothing at the top, while a floor set by the
+loudest loses everyone else.
+
+Two further reasons the driver was the wrong model. An iron off turf takes a
+divot, and that turf interaction adds a sharp second deceleration a teed driver
+has no equivalent for — the transient differs in shape, not only in size. And
+ball compression against a descending blow is sharper than the sweep that suits
+a driver, so a detector tuned to a sweep is looking for the wrong signature on
+the club you hit most.
+
+**22 — Pitching added as a fourth discipline.** The old `chipping` bucket
+covered "pitches, chips and bump-and-runs" in one threshold, which is too wide:
+a firm bump-and-run and a 58° wedge floated fifteen yards differ by more than
+twice the strike energy. Split into `chipping` (firm, low, releasing — 40) and
+`pitching` (58° at 10-15 yards — 18), which sits much closer to a putt than to a
+swing, as it should. It still ducks audio: a soft wedge has a click that
+separates a crisp strike from a thin or fat one, and that is worth hearing. Only
+putting stays silent.
+
+**23 — Sensor saturation is now a full-swing-only caveat.** Nothing in the short
+game gets near the accelerometer's limit, so "peak numbers are a floor" was
+misleading everywhere except full swings. `canSaturateSensor` gates it, and the
+Setup copy no longer implies a driver.

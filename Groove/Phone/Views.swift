@@ -227,7 +227,7 @@ struct FormView: View {
     @State private var lens: Discipline = .fullSwing
 
     /// Disciplines that actually have strokes recorded. No point offering a
-    /// putting tab to someone who has only ever hit drivers.
+    /// putting tab to someone who has only ever hit full shots.
     private var available: [Discipline] { c.summary.disciplinesPresent }
 
     /// Everything below reads from this, never from the unfiltered summary.
@@ -614,7 +614,7 @@ struct SetupView: View {
     private var limitsCard: some View {
         Card("what this can't tell you") {
             Bullet("Nothing about the ball — no distance, no spin, no start line. It watches your body, not the shot.")
-            Bullet("How hard you hit it is a rough guide, not a number to chase. Above a certain force the watch stops being able to tell the difference, so a big hit and a huge one read the same.")
+            Bullet("How hard you hit it is a rough guide, not a number to chase. On the longer clubs the watch reaches its limit, so a big hit and a huge one can read the same.")
             Bullet("It knows when you hit the ball to within about a hundredth of a second, which is plenty for timing but not for anything finer.")
         }
     }
