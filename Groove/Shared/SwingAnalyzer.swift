@@ -10,6 +10,10 @@ enum SwingAnalyzer {
     /// shock of the strike; a phone in a back pocket sees a fraction of it
     /// through the body. Using the wrist number on pelvis data means the
     /// crossing never happens and the metric silently returns nil forever.
+    /// Full-swing defaults. Each discipline overrides these — a putt puts
+    /// roughly a fiftieth of a driver's energy through the wrist, so this
+    /// threshold would never be crossed on a green and the putt would leave no
+    /// trace at all. See `Discipline`.
     static let wristImpactThreshold: Double = 180
     static let pelvisImpactThreshold: Double = 35
     static let traceLength = 240                // resampled ensemble length
@@ -200,8 +204,14 @@ enum SwingAnalyzer {
     /// Impact-aligned and time-normalized. The normalization is not optional:
     /// without it, a fast swing and a slow swing smear against each other and
     /// you read tempo difference as inconsistency.
-    static func normalizedTrace(frames: [MotionFrame], impactIdx: Int) -> [Double] {
-        let pre = Int(tracePre * fs), post = Int(tracePost * fs)
+    /// Traces are always resampled to `traceLength`, so strokes from one
+    /// discipline stack correctly even though the window they came from is
+    /// shorter. Traces from *different* disciplines must never be stacked
+    /// together — the ensemble would align two different motions on the same
+    /// index and read the difference as inconsistency.
+    static func normalizedTrace(frames: [MotionFrame], impactIdx: Int,
+                                discipline: Discipline = .fullSwing) -> [Double] {
+        let pre = Int(discipline.tracePre * fs), post = Int(discipline.tracePost * fs)
         let lo = impactIdx - pre, hi = impactIdx + post
         guard lo >= 0, hi < frames.count else { return [] }
         let seg = frames[lo...hi].map(\.accelMagnitude)

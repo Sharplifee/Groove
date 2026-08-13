@@ -18,6 +18,7 @@ trap 'rm -rf "$OUT"' EXIT
 cp Tests/ExampleDataChecks.swift "$OUT/main.swift"
 "$SWIFTC" -swift-version 5 -O -o "$OUT/checks" \
     Groove/Shared/Models.swift \
+    Groove/Shared/Discipline.swift \
     Groove/Shared/SwingAnalyzer.swift \
     Groove/Phone/DemoData.swift \
     "$OUT/main.swift"

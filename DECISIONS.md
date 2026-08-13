@@ -137,3 +137,45 @@ state" — that is export compliance, unanswered. Set `usesNonExemptEncryption`
 false on the build, and added `ITSAppUsesNonExemptEncryption` to the Info.plist
 so every future build answers it at compile time and lands in the group without
 anyone touching App Store Connect.
+
+**18 — Short game and putting added as disciplines, not as tabs.** The app only
+knew how to see a full swing. Every number in the detector is calibrated to one:
+180 g at the wrist for contact, a 1.2 s pre-impact window, a 3:1 tempo
+reference. A putt puts under 10 g through the wrist, so the impact crossing
+never happened — putts didn't read as bad swings, they didn't exist at all, and
+no amount of UI would have surfaced them.
+
+`Discipline` carries the numbers that differ: impact thresholds at the wrist and
+pelvis, trace window, tempo reference, whether hips are worth reporting, and
+whether audio is touched. Chosen on the watch, because that is where you are
+when you walk from the range to the green, and locked during a session — traces
+from two disciplines must never share an ensemble, since the chart aligns on
+index and would read two different motions as one inconsistent one.
+
+Three judgements made along the way:
+
+*Putting does not duck audio.* The duck exists to expose the strike. A driver
+has a crack worth hearing; a putt has almost nothing, and dropping the music
+forty times an hour on a practice green to reveal silence would be pure
+irritation. Putts still record — they just leave the audio alone.
+
+*Sequencing is full-swing only.* Hips barely move in a chip and effectively
+don't in a putt. A number there would be noise presented as insight.
+
+*Repeatability is scored per discipline.* A putting stroke is a far simpler
+motion and the same player repeats it much more tightly. Judging both on the
+full-swing bands would flatter putting into meaninglessness.
+
+**19 — The trend card compares like with like.** Adding disciplines surfaced a
+bug in work from earlier today: Today's trend plotted every session on one line.
+With three disciplines that would show a player improving every time they walked
+to the green and collapsing every time they went back to the range. It now
+filters to the most recent session's discipline.
+
+**20 — One test was over-specified and was loosened deliberately.** "The oldest
+session is the loosest" forbids an off day worse than where the player started,
+which is a real and common shape — and once the example gained a believable bad
+session, the assertion failed on data that was more honest, not less. Replaced
+with a check that the first half averages worse than the second half and that
+the newest session is the best. Direction and endpoint are what the card has to
+communicate; the exact maximum is not.

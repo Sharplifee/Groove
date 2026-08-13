@@ -70,13 +70,27 @@ struct WatchRootView: View {
             // Swings and tempo are what you are here for. Practice-swing count is
             // a diagnostic, so it sits small and last.
             HStack {
-                stat("swings", "\(c.struckCount)")
+                stat(c.discipline.countWord, "\(c.struckCount)")
                 Spacer()
                 stat("tempo", c.lastTempo > 0 ? String(format: "%.1f", c.lastTempo) : "—")
             }
-            Text("\(c.rehearsalCount) practice swings")
+            Text("\(c.rehearsalCount) practice \(c.discipline.strokeWord)s")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
+
+            // Only before a session. Traces from two disciplines must never
+            // stack together, so switching mid-session is refused rather than
+            // silently mixing a putt into a full-swing ensemble.
+            if !c.isRunning {
+                Picker("", selection: Binding(get: { c.discipline },
+                                              set: { c.discipline = $0 })) {
+                    ForEach(Discipline.allCases) { d in
+                        Text(d.shortLabel).tag(d)
+                    }
+                }
+                .pickerStyle(.navigationLink)
+                .frame(height: 32)
+            }
 
             Button {
                 c.isRunning ? c.stop() : c.start()

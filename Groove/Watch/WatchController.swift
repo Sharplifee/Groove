@@ -25,6 +25,22 @@ final class WatchController: NSObject, ObservableObject {
     @Published var phoneReady = false
     @Published var unsentSwings = 0
 
+    /// What you're about to practise. Picked on the watch because that is where
+    /// you are when you decide — walking from the range to the putting green,
+    /// with the phone already in a pocket.
+    ///
+    /// Changing this changes the detector's numbers, not a label: impact
+    /// threshold, trace window, and whether audio is touched at all. Locked
+    /// while a session runs, because traces from two disciplines must never
+    /// stack together — the ensemble would align two different motions on the
+    /// same index and read the difference as inconsistency.
+    @Published var discipline: Discipline = .fullSwing {
+        didSet {
+            guard !isRunning else { discipline = oldValue; return }
+            detector.discipline = discipline
+        }
+    }
+
     private let motion = CMMotionManager()
     private let healthStore = HKHealthStore()
     private let detector = RoutineDetector()
@@ -76,6 +92,7 @@ final class WatchController: NSObject, ObservableObject {
     /// Applied whenever the phone pushes new settings, mid-session included.
     func apply(_ config: Config) {
         detector.config = config
+        detector.discipline = discipline
         config.save()               // local cache for a cold start with no phone
         phoneConfigured = true
     }
@@ -108,6 +125,7 @@ final class WatchController: NSObject, ObservableObject {
             // Prefer the phone's config over our local copy — UserDefaults do
             // not cross devices, so the local one is almost certainly defaults.
             detector.config = ConfigSync.currentFromPhone() ?? Config.load()
+            detector.discipline = discipline
             detector.reset()
             t0 = Date()
             sessionID = UUID()
@@ -203,6 +221,10 @@ extension WatchController: RoutineDetectorDelegate {
 
     func detectorDidFireTakeaway(confidence: Double) {
         state = .swinging
+        // A putt has almost no sound worth exposing, so ducking forty times an
+        // hour on a practice green would be pure irritation. The stroke is still
+        // recorded — it just doesn't touch the player's audio.
+        guard discipline.ducksAudio else { return }
         send(["event": "takeaway", "confidence": confidence])
         // Deliberately silent. Buzzing a player's wrist at the instant their
         // backswing starts is the worst possible moment to interrupt them.

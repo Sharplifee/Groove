@@ -53,7 +53,8 @@ enum DemoData {
                       date: Date,
                       struck: Bool = true,
                       looseness: Double = 0.35,
-                      hasPelvis: Bool = true) -> Swing {
+                      hasPelvis: Bool = true,
+                      discipline: Discipline = .fullSwing) -> Swing {
         func rand(_ salt: Int) -> Double {
             let x = sin(Double(seed) * 41.7 + Double(salt) * 11.3) * 24634.6345
             return x - x.rounded(.down)
@@ -68,13 +69,24 @@ enum DemoData {
                                                    transitionSharpness: 0.08,
                                                    dwellVariance: 0.05),
                          armConfidence: 0.18 + rand(9) * 0.16,
-                         metrics: SwingMetrics(),
+                         metrics: { var m = SwingMetrics(); m.discipline = discipline; return m }(),
                          normalizedTrace: [])
         }
 
-        let back = 0.78 + (rand(1) - 0.5) * 0.10 * looseness
-        let down = 0.26 + (rand(2) - 0.5) * 0.04 * looseness
+        // Stroke duration and ratio both move with the discipline. A putting
+        // stroke is roughly half the length of a full swing and accelerates
+        // through the ball rather than releasing into it, so it sits nearer
+        // 2:1 than 3:1. Generating everything at full-swing timings would make
+        // the putting tab show a player with a driver's tempo on the green.
+        let span: Double = { switch discipline {
+            case .fullSwing: return 1.0
+            case .chipping:  return 0.72
+            case .putting:   return 0.5 } }()
+        let ratio = discipline.tempoReference
+        let down = 0.26 * span + (rand(2) - 0.5) * 0.04 * looseness
+        let back = down * ratio + (rand(1) - 0.5) * 0.10 * looseness
         var m = SwingMetrics()
+        m.discipline = discipline
         m.backswing = back
         m.downswing = down
         m.tempoRatio = back / down
@@ -82,8 +94,12 @@ enum DemoData {
         m.transitionSharpness = 22 + rand(4) * 8
         m.smoothness = 84 + rand(5) * 12 - looseness * 10
         m.peakRotation = 24 + rand(6) * 6
-        m.clipped = rand(7) > 0.72          // saturation is common on a Series 7
-        if hasPelvis { m.pelvisLeadMs = 28 + (rand(8) - 0.35) * 70 }
+        // Only a full swing hits hard enough to saturate the watch, and only a
+        // full swing turns the hips enough for the pocket phone to read.
+        m.clipped = discipline == .fullSwing && rand(7) > 0.72
+        if hasPelvis && discipline.reportsSequencing {
+            m.pelvisLeadMs = 28 + (rand(8) - 0.35) * 70
+        }
 
         return Swing(date: date, sessionID: sessionID, struck: true,
                      routine: RoutineSignature(plateauCount: 3,
@@ -106,28 +122,43 @@ enum DemoData {
     /// example passes a real value so the line has the direction the card
     /// promises.
     static func history(sessions: Int = 3, perSession: Int = 34,
-                        improvement: Double = 0) -> [Swing] {
+                        improvement: Double = 0,
+                        discipline: Discipline = .fullSwing) -> [Swing] {
         var out: [Swing] = []
         var seed = 1
         for s in 0..<sessions {
             let id = UUID()
             let day = Calendar.current.date(byAdding: .day, value: -s * 4, to: Date())!
-            let start = Calendar.current.date(bySettingHour: 17, minute: 20, second: 0, of: day)!
+            // Offset the hour per discipline so a chipping session and a full
+            // swing session on the same afternoon stay separate sessions rather
+            // than merging into one mixed block.
+            let hour = 17 - Discipline.allCases.firstIndex(of: discipline)!
+            let start = Calendar.current.date(bySettingHour: hour, minute: 20, second: 0, of: day)!
             // s == 0 is the most recent session, so age scales the older ones up.
             let age = sessions > 1 ? Double(s) / Double(sessions - 1) : 0
-            let era = 1 + improvement * age
+            // A dead-straight improvement curve looks fabricated — nobody gets
+            // measurably better every single session. One session bucks the
+            // trend, which is what a real run of form looks like. The endpoints
+            // are left alone so the overall direction still reads clearly.
+            let offDay = (s == 1 && sessions > 2) ? 1.7 : 1.0
+            let era = (1 + improvement * age) * offDay
             for i in 0..<perSession {
                 // Repeatability degrades through a session — that's the fatigue
                 // drift the Form tab is meant to reveal.
-                let fatigue = (0.28 + Double(i) / Double(perSession) * 0.42) * era
+                // Putting strokes are simpler motions and repeat far more
+                // tightly than full swings, so the spread has to scale or the
+                // example would show a player who putts like a machine.
+                let fatigue = (0.28 + Double(i) / Double(perSession) * 0.42)
+                    * era * discipline.motionScale
                 let at = start.addingTimeInterval(Double(i) * 46)
-                out.append(swing(seed: seed, sessionID: id, date: at, looseness: fatigue))
+                out.append(swing(seed: seed, sessionID: id, date: at,
+                                 looseness: fatigue, discipline: discipline))
                 seed += 1
                 // One or two rehearsals between shots, as in life.
                 for r in 0..<(i % 3 == 0 ? 2 : 1) {
                     out.append(swing(seed: seed, sessionID: id,
                                      date: at.addingTimeInterval(Double(r) * 6 - 20),
-                                     struck: false))
+                                     struck: false, discipline: discipline))
                     seed += 1
                 }
             }
@@ -141,7 +172,13 @@ enum DemoData {
     /// What a fresh install shows: enough history for the trend line and the
     /// ensemble overlay to both have something to say, and a believable arc of
     /// improvement so the trend card reads as a story rather than as noise.
+    /// A fresh install opens on all three disciplines populated, so the Form
+    /// tab's practice picker has something behind every option. Someone who has
+    /// never opened the app should be able to see what its putting analysis
+    /// looks like before deciding whether to walk to the green with it.
     static func exampleSwings() -> [Swing] {
-        history(sessions: 4, perSession: 26, improvement: 1.5)
+        history(sessions: 4, perSession: 26, improvement: 1.5, discipline: .fullSwing)
+        + history(sessions: 2, perSession: 18, improvement: 0.8, discipline: .chipping)
+        + history(sessions: 2, perSession: 22, improvement: 1.0, discipline: .putting)
     }
 }

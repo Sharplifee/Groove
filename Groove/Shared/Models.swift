@@ -135,6 +135,9 @@ struct RoutineSignature: Codable, Equatable {
 // MARK: - Swings
 
 struct SwingMetrics: Codable, Equatable {
+    /// What the player was doing. Defaults to `.fullSwing` so swings recorded
+    /// before disciplines existed decode without loss.
+    var discipline: Discipline = .fullSwing
     var backswing: TimeInterval = 0
     var downswing: TimeInterval = 0
     var transitionDwell: TimeInterval = 0
@@ -187,19 +190,42 @@ struct SessionSummary {
         return m == 0 ? 0 : sd / m * 100
     }
 
+    /// The discipline these swings belong to. A session is normally one
+    /// discipline; if it somehow mixes, the most common one wins so the
+    /// thresholds and wording stay coherent.
+    var discipline: Discipline {
+        let all = struckSwings.map(\.metrics.discipline)
+        guard !all.isEmpty else { return .fullSwing }
+        return Dictionary(grouping: all, by: { $0 })
+            .max(by: { $0.value.count < $1.value.count })!.key
+    }
+
+    /// Judged against the discipline's own bands. A putting stroke is a simpler
+    /// motion than a full swing, so the same player repeats it far more tightly
+    /// — scoring both on the full-swing scale would flatter putting into
+    /// meaninglessness.
     var repeatabilityVerdict: String {
-        switch repeatability {
-        case 0:        return "Not enough swings yet."
-        case ..<3.5:   return "Very consistent — you're repeating the same swing."
-        case ..<5:     return "Consistent. This is where you want to be."
-        case ..<8:     return "A bit loose. Something is changing between swings."
-        default:       return "Every swing is different right now."
+        discipline.repeatabilityVerdict(repeatability)
+    }
+
+    /// Only the swings from one discipline, for a Form tab filtered to it.
+    func filtered(to d: Discipline) -> SessionSummary {
+        SessionSummary(swings: swings.filter { $0.metrics.discipline == d })
+    }
+
+    /// Which disciplines actually appear here, in a stable order.
+    var disciplinesPresent: [Discipline] {
+        Discipline.allCases.filter { d in
+            struckSwings.contains { $0.metrics.discipline == d }
         }
     }
 
     /// Average milliseconds by which the hips led the hands, across the swings
     /// that carried a phone. Nil when the phone wasn't in a pocket.
     var meanPelvisLead: Double? {
+        // Hips barely move in a chip and effectively don't in a putt. Reporting
+        // a number there would be measuring noise and presenting it as insight.
+        guard discipline.reportsSequencing else { return nil }
         let v = struckSwings.compactMap(\.metrics.pelvisLeadMs)
         guard !v.isEmpty else { return nil }
         return v.reduce(0, +) / Double(v.count)

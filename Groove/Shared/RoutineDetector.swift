@@ -90,6 +90,14 @@ final class RoutineDetector {
     private(set) var template = RoutineTemplate.load()
     var config = Config.load()
 
+    /// What the player is practising. Set from the watch before a session
+    /// starts, and it changes the detector's numbers rather than just a label:
+    /// impact threshold, trace window, and whether audio is touched at all.
+    /// A putt crosses 9 g at the wrist where a driver crosses 180, so running
+    /// one discipline's threshold over another's data means the crossing never
+    /// happens and the stroke is never recorded.
+    var discipline: Discipline = .fullSwing
+
     /// True once this session has seen its first struck ball.
     private(set) var sessionOpened = false
 
@@ -217,9 +225,10 @@ final class RoutineDetector {
     private func evaluateSwinging(_ f: MotionFrame) {
         guard let takeaway = takeawayIdx else { state = .watching; return }
         let elapsed = f.t - buffer[takeaway].t
-        let tail = Int(SwingAnalyzer.tracePost * SwingAnalyzer.fs)
+        let tail = Int(discipline.tracePost * SwingAnalyzer.fs)
 
-        if let impact = SwingAnalyzer.impactIndex(buffer, from: takeaway),
+        if let impact = SwingAnalyzer.impactIndex(buffer, from: takeaway,
+                                                  threshold: discipline.wristImpactThreshold),
            buffer.count - impact > tail {
             complete(takeaway: takeaway, impact: impact)
             return
@@ -256,15 +265,19 @@ final class RoutineDetector {
 
         let swing: Swing
         if let impact {
+            var m = SwingAnalyzer.metrics(frames: buffer,
+                                          takeawayIdx: takeaway, impactIdx: impact)
+            m.discipline = discipline
             swing = Swing(struck: true, routine: sig, armConfidence: confidence,
-                          metrics: SwingAnalyzer.metrics(frames: buffer,
-                                                         takeawayIdx: takeaway,
-                                                         impactIdx: impact),
-                          normalizedTrace: SwingAnalyzer.normalizedTrace(frames: buffer,
-                                                                        impactIdx: impact))
+                          metrics: m,
+                          normalizedTrace: SwingAnalyzer.normalizedTrace(
+                              frames: buffer, impactIdx: impact,
+                              discipline: discipline))
         } else {
+            var m = SwingMetrics()
+            m.discipline = discipline
             swing = Swing(struck: false, routine: sig, armConfidence: confidence,
-                          metrics: SwingMetrics(), normalizedTrace: [])
+                          metrics: m, normalizedTrace: [])
         }
 
         let armed = wasArmedForThisSwing

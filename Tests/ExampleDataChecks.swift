@@ -11,8 +11,19 @@ let example = DemoData.exampleSwings()
 let sessions = RangeSession.group(example)
 let summary  = SessionSummary(swings: example)
 
+// The example covers all three disciplines, so anything comparing numbers
+// across sessions has to compare like with like. A putting stroke repeats far
+// tighter than a full swing by nature; mixing them makes every metric lie.
+let full = summary.filtered(to: .fullSwing)
+
 check("example is not empty", !example.isEmpty, "\(example.count) swings")
-check("example spans several sessions", sessions.count == 4, "\(sessions.count) sessions")
+check("example spans several sessions", sessions.count == 8, "\(sessions.count) sessions")
+check("all three disciplines are present",
+      summary.disciplinesPresent.count == 3,
+      summary.disciplinesPresent.map(\.label).joined(separator: ", "))
+check("no session mixes disciplines",
+      sessions.allSatisfy { s in
+          Set(s.swings.map(\.metrics.discipline)).count == 1 })
 check("every session has struck swings", sessions.allSatisfy { $0.struckCount > 0 })
 check("every session has rehearsals",
       sessions.allSatisfy { $0.swings.count > $0.struckCount })
@@ -20,22 +31,47 @@ check("sessions sort newest first",
       zip(sessions, sessions.dropFirst()).allSatisfy { $0.date > $1.date })
 
 // Numbers a golfer would believe
-let tempo = summary.meanTempo
+let tempo = full.meanTempo
 check("mean tempo is plausible", tempo > 2.2 && tempo < 4.2,
       String(format: "%.2f : 1", tempo))
-let rep = summary.repeatability
+let rep = full.repeatability
 check("repeatability is plausible", rep > 0.5 && rep < 25,
       String(format: "%.1f%%", rep))
 check("repeatability verdict is not the empty case",
-      summary.repeatabilityVerdict != "Not enough swings yet.",
-      summary.repeatabilityVerdict)
+      full.repeatabilityVerdict != "Not enough strokes yet.",
+      full.repeatabilityVerdict)
 
 // New in this rebuild
-check("mean pelvis lead exists", summary.meanPelvisLead != nil,
-      summary.meanPelvisLead.map { String(format: "%.0f ms", $0) } ?? "nil")
+check("full swing reports pelvis lead", full.meanPelvisLead != nil,
+      full.meanPelvisLead.map { String(format: "%.0f ms", $0) } ?? "nil")
+check("putting reports no pelvis lead",
+      summary.filtered(to: .putting).meanPelvisLead == nil,
+      "hips don't move enough in a putt to measure")
+
+// Each discipline's tempo must sit near its own reference, not the full swing's
+for d in Discipline.allCases {
+    let t = summary.filtered(to: d).meanTempo
+    check("\(d.label) tempo near its reference",
+          abs(t - d.tempoReference) < 0.6,
+          String(format: "%.2f vs %.2f", t, d.tempoReference))
+}
+
+// Putting must repeat tighter than a full swing, or the scaling is wrong
+check("putting repeats tighter than full swing",
+      summary.filtered(to: .putting).repeatability < full.repeatability,
+      String(format: "%.2f vs %.2f",
+             summary.filtered(to: .putting).repeatability, full.repeatability))
+
+// Thresholds must descend with strike energy or quiet strokes never register
+check("impact thresholds descend by strike energy",
+      Discipline.fullSwing.wristImpactThreshold > Discipline.chipping.wristImpactThreshold
+      && Discipline.chipping.wristImpactThreshold > Discipline.putting.wristImpactThreshold)
+check("only the full swing ducks audio",
+      Discipline.fullSwing.ducksAudio && Discipline.chipping.ducksAudio
+      && !Discipline.putting.ducksAudio)
 
 // Traces must be aligned and equal length or the ensemble chart lies
-let traces = summary.struckSwings.map(\.normalizedTrace)
+let traces = full.struckSwings.map(\.normalizedTrace)
 check("every struck swing carries a trace", traces.allSatisfy { !$0.isEmpty })
 check("all traces are the same length",
       Set(traces.map(\.count)).count == 1, "len \(traces.first?.count ?? 0)")
@@ -43,6 +79,9 @@ check("trace length matches the analyzer",
       traces.first?.count == SwingAnalyzer.traceLength)
 check("rehearsals carry no trace",
       summary.rehearsals.allSatisfy { $0.normalizedTrace.isEmpty })
+check("traces are the same length across disciplines",
+      Set(summary.struckSwings.map(\.normalizedTrace.count)).count == 1,
+      "so an ensemble never mixes window lengths")
 
 // Impact should land where the chart draws its impact line
 if let t = traces.first {
@@ -61,14 +100,14 @@ check("ensemble band is ordered low <= high",
 
 // Self-labelling: struck swings must score higher than rehearsals, or
 // calibration can never separate them
-let realConf = summary.struckSwings.map(\.armConfidence)
-let rehConf  = summary.rehearsals.map(\.armConfidence)
+let realConf = full.struckSwings.map(\.armConfidence)
+let rehConf  = full.rehearsals.map(\.armConfidence)
 let mr = realConf.reduce(0,+)/Double(realConf.count)
 let mh = rehConf.reduce(0,+)/Double(rehConf.count)
 check("real swings score above rehearsals", mr > mh,
       String(format: "%.2f vs %.2f", mr, mh))
-let cal = CalibrationResult(realCount: summary.struckSwings.count,
-                           rehearsalCount: summary.rehearsals.count,
+let cal = CalibrationResult(realCount: full.struckSwings.count,
+                           rehearsalCount: full.rehearsals.count,
                            meanRealConfidence: mr, meanRehearsalConfidence: mh)
 check("example separation reads as ready", cal.isReady, cal.verdict)
 
@@ -92,23 +131,36 @@ check("sensitivity thresholds ascend",
 let enc = JSONEncoder(); let dec = JSONDecoder()
 let rt = try! dec.decode([Swing].self, from: try! enc.encode(example))
 check("swings survive a JSON round trip", rt.count == example.count)
+check("round trip preserves discipline",
+      rt.map(\.metrics.discipline) == example.map(\.metrics.discipline))
 check("round trip preserves traces",
       rt.first(where: { $0.struck })?.normalizedTrace
         == example.first(where: { $0.struck })?.normalizedTrace)
 
 // ---- The trend card must have a story, not scatter ----
-let byAge = RangeSession.group(example).sorted { $0.date < $1.date }
+// Per discipline, exactly as Today plots it. Mixing them here would compare a
+// putting session against a driver session and mean nothing.
+let byAge = RangeSession.group(example)
+    .filter { $0.summary.discipline == .fullSwing }
+    .sorted { $0.date < $1.date }
 let curve = byAge.map { $0.summary.repeatability }
 check("trend has enough points to draw", curve.count >= 3, "\(curve.count)")
 check("trend spans a visible range", (curve.max()! - curve.min()!) > 2.0,
       String(format: "spread %.2f", curve.max()! - curve.min()!))
-check("oldest session is the loosest", curve.first! == curve.max()!,
-      String(format: "%.2f oldest", curve.first!))
+// Direction, not extremes. Requiring the oldest session to be the single
+// loosest forbids an off day worse than where the player started, which is a
+// real and common shape. What the card has to communicate is that things are
+// improving and that the latest session is the best one.
+let half = curve.count / 2
+let early = curve.prefix(half).reduce(0,+) / Double(half)
+let late  = curve.suffix(half).reduce(0,+) / Double(half)
+check("trend improves overall", early > late,
+      String(format: "early %.2f → late %.2f", early, late))
 check("newest session is the tightest", curve.last! == curve.min()!,
       String(format: "%.2f newest", curve.last!))
 check("trend is not a straight line",
       !zip(curve, curve.dropFirst()).allSatisfy { $0 > $1 },
-      "has a realistic wobble")
+      "has at least one off session, as a real run of form does")
 
 // Previews must still get a plain history with no forced arc
 check("default history still produces sessions",

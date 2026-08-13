@@ -95,8 +95,19 @@ struct TodayView: View {
                 if let last = c.sessions.first {
                     SessionCard(session: last, isLatest: true)
                 }
-                if c.sessions.count > 1 {
-                    TrendCard(sessions: Array(c.sessions.prefix(8)).reversed())
+                // Only sessions of the same discipline as the last one. A
+                // putting session repeats far tighter than a full-swing session
+                // by nature, so plotting them on one line would show a player
+                // improving every time they walked to the green and collapsing
+                // every time they went back to the range.
+                if let latest = c.sessions.first {
+                    let d = latest.summary.discipline
+                    let comparable = c.sessions
+                        .filter { $0.summary.discipline == d }
+                        .prefix(8).reversed()
+                    if comparable.count > 1 {
+                        TrendCard(sessions: Array(comparable), discipline: d)
+                    }
                 }
             }
 
@@ -143,7 +154,7 @@ struct TodayView: View {
                 Circle().fill(Color.amber).frame(width: 9, height: 9)
                 Text("Session running").font(.grooveHeadline)
             }
-            Text("\(c.summary.struckSwings.count) swings so far")
+            Text("\(c.summary.struckSwings.count) \(c.summary.discipline.countWord) so far")
                 .font(.grooveCallout).foregroundStyle(.muted)
         }
         .frame(maxWidth: .infinity).padding(.vertical, Space.xl)
@@ -156,6 +167,7 @@ struct TodayView: View {
 /// inverted deliberately — a rising line always means improving.
 struct TrendCard: View {
     let sessions: [RangeSession]
+    var discipline: Discipline = .fullSwing
 
     private var values: [Double] {
         sessions.map { $0.summary.repeatability }.filter { $0 > 0 }
@@ -164,7 +176,7 @@ struct TrendCard: View {
     var body: some View {
         if values.count > 1 {
             ChartFrame(title: "are you getting more consistent",
-                       caption: "Each point is one session. Higher is better — the line rises as your swing becomes more repeatable.",
+                       caption: "Each point is one \(discipline.label.lowercased()) session. Higher is better — the line rises as you become more repeatable.",
                        height: 120) {
                 TrendLine(values: values)
             }
@@ -212,6 +224,17 @@ private struct TrendLine: View {
 struct FormView: View {
     @ObservedObject var c: PhoneController
     @State private var confirmDelete: Swing?
+    @State private var lens: Discipline = .fullSwing
+
+    /// Disciplines that actually have strokes recorded. No point offering a
+    /// putting tab to someone who has only ever hit drivers.
+    private var available: [Discipline] { c.summary.disciplinesPresent }
+
+    /// Everything below reads from this, never from the unfiltered summary.
+    /// Traces from two disciplines must never share an ensemble — the chart
+    /// aligns on index, so a putt and a drive would overlay two different
+    /// motions and the difference would read as inconsistency.
+    private var view: SessionSummary { c.summary.filtered(to: lens) }
 
     var body: some View {
         Screen(title: "Form") {
@@ -219,18 +242,30 @@ struct FormView: View {
                 Banner(icon: Icon.sample, text: "This is an example session, not your swings.")
             }
 
-            if c.summary.struckSwings.count < 2 {
+            if available.count > 1 {
+                Picker("Practice", selection: $lens) {
+                    ForEach(available) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            if view.struckSwings.count < 2 {
                 EmptyState(icon: Icon.form,
                            title: "Nothing to compare yet",
-                           message: "This fills in once you've hit a handful of balls in a session.")
+                           message: available.isEmpty
+                             ? "This fills in once you've hit a handful of balls in a session."
+                             : "Not enough \(lens.countWord) yet. Hit a few more and this fills in.")
             } else {
                 repeatabilityCard
-                ChartFrame(title: "every swing, stacked on impact",
-                           caption: "Each faint line is one swing, lined up on the moment you hit the ball. A tight band means you're repeating. Where it fans out is where it breaks down.") {
-                    EnsembleChart(traces: c.summary.struckSwings.map(\.normalizedTrace))
+                ChartFrame(title: "every \(lens.strokeWord), stacked on impact",
+                           caption: "Each faint line is one \(lens.strokeWord), lined up on the moment you strike the ball. A tight band means you're repeating. Where it fans out is where it breaks down.") {
+                    EnsembleChart(traces: view.struckSwings.map(\.normalizedTrace))
                 }
                 tempoCard
-                if let lead = c.summary.meanPelvisLead { sequencingCard(lead) }
+                // Only offered where hips actually move. In a chip they barely
+                // do and in a putt they effectively don't, so a number there
+                // would be noise dressed as insight.
+                if let lead = view.meanPelvisLead { sequencingCard(lead) }
             }
 
             if !c.sessions.isEmpty {
@@ -259,23 +294,31 @@ struct FormView: View {
     private var repeatabilityCard: some View {
         Card("repeatability") {
             HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-                Text(String(format: "%.1f", c.summary.repeatability))
+                Text(String(format: "%.1f", view.repeatability))
                     .font(.grooveHero).foregroundStyle(.bone)
                 Text("%").font(.grooveHeadline).foregroundStyle(.muted)
             }
-            Text(c.summary.repeatabilityVerdict)
+            Text(view.repeatabilityVerdict)
                 .font(.grooveBody).foregroundStyle(.bone)
-            Note("How much your timing moves from swing to swing. Lower is better — 0% would be the same swing every time.")
+            Note("How much your timing moves from \(lens.strokeWord) to \(lens.strokeWord). Lower is better — 0% would be the same one every time.")
+            if lens == .putting {
+                Note("This is the number worth chasing on the green. A missed putt tells you almost nothing about your stroke — the read and the green speed get in the way. Whether you repeated it does.",
+                     tint: .accent)
+            }
         }
     }
 
     private var tempoCard: some View {
         Card("tempo") {
             HStack(spacing: Space.l) {
-                StatTile("yours", String(format: "%.2f", c.summary.meanTempo), unit: ": 1")
-                StatTile("tour average", "3.00", unit: ": 1", tint: .accent)
+                StatTile("yours", String(format: "%.2f", view.meanTempo), unit: ": 1")
+                StatTile(lens.tempoReferenceLabel,
+                         String(format: "%.2f", lens.tempoReference),
+                         unit: ": 1", tint: .accent)
             }
-            Note("How long your backswing takes compared with your downswing. Most tour players sit near three to one. There's no right number — yours being the same every time matters more than matching theirs.")
+            Note(lens == .putting
+                 ? "How long your backstroke takes compared with your forward stroke. Around two to one is typical — a putt accelerates through the ball rather than releasing into it."
+                 : "How long your backswing takes compared with your downswing. There's no right number — yours being the same every time matters more than matching anyone else's.")
         }
     }
 
@@ -302,7 +345,7 @@ struct SessionCard: View {
         Card(isLatest ? "last session"
                       : session.date.formatted(date: .abbreviated, time: .omitted)) {
             HStack(spacing: Space.l) {
-                StatTile("swings", "\(session.struckCount)")
+                StatTile(session.summary.discipline.countWord, "\(session.struckCount)")
                 StatTile("repeatability",
                          session.struckCount > 1
                          ? String(format: "%.1f", session.summary.repeatability)
