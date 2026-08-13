@@ -1,13 +1,32 @@
 # Phase 6 — verification
 
-Everything below needs Xcode and the physical devices, so it runs on the Mac.
-Nothing here was executed in the cloud container: it has no Swift toolchain
-(`which swiftc` returns nothing, `uname` is Linux x86_64), so the code in this
-commit is unbuilt.
+## What has already been verified, and how
+
+A Swift 6.0.3 Linux toolchain was installed in the build container, so some of
+this is no longer a matter of inspection:
+
+- **Every file parses.** `Tests/parse-all.sh` runs `swiftc -parse` over all 14
+  Swift files. Clean.
+- **The shared logic type-checks in full.** `Models.swift`,
+  `SwingAnalyzer.swift` and `RoutineDetector.swift` are Foundation-only and
+  compile with no errors.
+- **31 behavioural checks pass.** `Tests/run-checks.sh` builds and runs them:
+  trace alignment against the chart's impact line, ensemble band ordering,
+  self-labelling separation, JSON round-tripping, generator determinism, the
+  lead-wrist derivation, sensitivity ordering, and the shape of the first-run
+  example.
+
+What that does **not** cover: SwiftUI, AVFoundation, CoreMotion and
+WatchConnectivity do not exist off Apple platforms, so none of the view code or
+the audio engine has been type-checked, and nothing has been run on hardware.
+Expect the first Xcode build to surface type errors in the view layer.
+
+Everything below still needs Xcode and the physical devices.
 
 Run it with:
 
     cd ~/Developer/Groove && git pull
+    ./Tests/parse-all.sh && ./Tests/run-checks.sh
     xcodegen generate && open Groove.xcodeproj
 
 ## 6.1 — every screen, both themes, populated and empty

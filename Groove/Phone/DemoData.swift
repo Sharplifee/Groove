@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 /// A worked example session — realistic enough that a new player can see
 /// exactly what their own numbers will look like before hitting a ball.
@@ -99,17 +98,28 @@ enum DemoData {
 
     /// A full history: several sessions, each with struck swings and the
     /// rehearsals between them, loosening slightly as fatigue sets in.
-    static func history(sessions: Int = 3, perSession: Int = 34) -> [Swing] {
+    ///
+    /// `improvement` tilts the whole history so older sessions are looser than
+    /// recent ones. At 0 the sessions differ only by noise, which is right for
+    /// a preview but wrong for the first-run example — a trend card showing
+    /// random scatter teaches a new player nothing and reads as broken. The
+    /// example passes a real value so the line has the direction the card
+    /// promises.
+    static func history(sessions: Int = 3, perSession: Int = 34,
+                        improvement: Double = 0) -> [Swing] {
         var out: [Swing] = []
         var seed = 1
         for s in 0..<sessions {
             let id = UUID()
             let day = Calendar.current.date(byAdding: .day, value: -s * 4, to: Date())!
             let start = Calendar.current.date(bySettingHour: 17, minute: 20, second: 0, of: day)!
+            // s == 0 is the most recent session, so age scales the older ones up.
+            let age = sessions > 1 ? Double(s) / Double(sessions - 1) : 0
+            let era = 1 + improvement * age
             for i in 0..<perSession {
                 // Repeatability degrades through a session — that's the fatigue
-                // drift the Profile tab is meant to reveal.
-                let fatigue = 0.28 + Double(i) / Double(perSession) * 0.42
+                // drift the Form tab is meant to reveal.
+                let fatigue = (0.28 + Double(i) / Double(perSession) * 0.42) * era
                 let at = start.addingTimeInterval(Double(i) * 46)
                 out.append(swing(seed: seed, sessionID: id, date: at, looseness: fatigue))
                 seed += 1
@@ -129,44 +139,9 @@ enum DemoData {
     static let oneSession: [Swing] = history(sessions: 1, perSession: 18)
 
     /// What a fresh install shows: enough history for the trend line and the
-    /// ensemble overlay to both have something to say.
-    static func exampleSwings() -> [Swing] { history(sessions: 4, perSession: 26) }
-}
-
-// MARK: - Previews
-
-#Preview("Today — empty") {
-    TodayView(c: PhoneController.preview(swings: []))
-}
-
-#Preview("Today — after a session") {
-    TodayView(c: PhoneController.preview(swings: DemoData.history(sessions: 4, perSession: 20)))
-}
-
-#Preview("Form — populated") {
-    FormView(c: PhoneController.preview(swings: DemoData.history()))
-}
-
-#Preview("Form — empty") {
-    FormView(c: PhoneController.preview(swings: []))
-}
-
-#Preview("Paired device") {
-    PairedDeviceView(c: PhoneController.preview(swings: DemoData.oneSession))
-}
-
-#Preview("Setup") {
-    SetupView(c: PhoneController.preview(swings: DemoData.history()))
-}
-
-#Preview("Onboarding") {
-    OnboardingView(c: PhoneController.preview(swings: []))
-}
-
-#Preview("Ensemble chart") {
-    EnsembleChart(traces: DemoData.history(sessions: 1, perSession: 30)
-        .filter(\.struck).map(\.normalizedTrace))
-        .frame(height: 220)
-        .padding()
-        .background(Color.panel)
+    /// ensemble overlay to both have something to say, and a believable arc of
+    /// improvement so the trend card reads as a story rather than as noise.
+    static func exampleSwings() -> [Swing] {
+        history(sessions: 4, perSession: 26, improvement: 1.5)
+    }
 }

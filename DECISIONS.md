@@ -54,3 +54,24 @@ which. Each question now carries its own heading and full-word answers.
 **6 — Impact-burst defaults: 130 ms window, 18 ms pre-roll, 6 ms fades.** The
 pre-roll catches the club entering the ball rather than starting mid-crack; the
 fades stop the slice edges clicking. Exposed as constants for range tuning.
+
+**7 — The example-data generator was split from its SwiftUI previews.**
+`DemoData.swift` now imports Foundation only; the `#Preview` blocks moved to
+`Previews.swift`. This isn't tidying — it makes the generator compile and run
+off-device, which is the only way its output could actually be checked without
+a simulator. See `Tests/run-checks.sh`.
+
+**8 — The first-run example was given an improvement arc.** The four example
+sessions previously differed only by noise: 2.47, 1.98, 3.21, 2.61 percent, in
+that order. The trend card on Today asks "are you getting more consistent" and
+then drew random scatter, which teaches a new player nothing and reads as
+broken. `history()` gained an `improvement` parameter that scales older sessions
+looser; the example now runs 6.16 → 3.97 → 4.84 → 2.61, a clear direction with
+one realistic wobble rather than a straight line. Previews still call the plain
+version, so nothing else changed shape.
+
+**9 — Checks live in the repo, not in a session.** `Tests/parse-all.sh`
+syntax-checks every file; `Tests/run-checks.sh` builds and runs 31 assertions
+against the shared logic and the example data. Neither needs Xcode, a simulator
+or a device, so they run anywhere — including the machine that can't build the
+app.
