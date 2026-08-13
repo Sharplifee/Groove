@@ -100,3 +100,17 @@ dies at "Import signing certificate": `DIST_CERT_P12`, `DIST_CERT_PASSWORD`,
 were never added to the repository's secrets. Nothing to do with the code —
 the workflow has never once got as far as compiling. Adding those seven secrets
 is what turns a push into a build on the phone without touching Xcode at all.
+
+**13 — Signing solved without anything leaving the Mac.** The old workflow
+needed a `.p12` and two provisioning profiles as secrets, which is why it was
+stuck: those artefacts live in a Mac keychain. Xcode can instead authenticate to
+Apple with an App Store Connect API key and mint the certificate and profiles on
+the runner itself. The API key was already in the credentials store, so the
+secrets were set over the GitHub API and the pipeline now archives, signs and
+exports a real IPA containing both the phone and watch apps.
+
+**14 — One step is genuinely manual, and it was proven rather than assumed.**
+`POST /v1/apps` was called and returned 403 FORBIDDEN_ERROR, "the resource
+'apps' does not allow 'CREATE'". Creating the App Store Connect app record has
+to happen in the browser. Everything either side of it is automated. See
+DEPLOY.md.

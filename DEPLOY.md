@@ -1,85 +1,73 @@
-# Deploying Groove
+# Getting Groove onto the phone
 
-## Read this first — it isn't Vercel
+Push to `main` → GitHub builds, signs, and ships to TestFlight → it appears on
+your phone. No Mac, no cable, no Xcode.
 
-Sharp-OS and Atlas go live 60 seconds after a push because they're web. Groove
-can't, and no amount of pipeline fixes that. Apple has no mechanism for pushing
-new native code to a running app. Every change requires a compile on macOS, a
-code signature, and a distribution step.
+That pipeline is built and working except for **one step Apple will not let any
+API perform**. Do it once and every push after that is automatic.
 
-The webview-shell trick that makes momentum-customer feel instant doesn't rescue
-this one either. That app is a thin wrapper around a hosted page, so the page
-updates and the shell never changes. Groove can't work that way — it needs
-`CoreMotion` at 100 Hz, `HKWorkoutSession`, and `AVAudioEngine`, and none of
-those are reachable from a webview. The parts that make this app what it is are
-precisely the parts that must be native.
+---
 
-So the question isn't how to get real-time. It's which of two loops you want.
+## The one manual step
 
-## Loop A — local build, ~2-3 minutes
+App Store Connect has no app record for `com.connor.groove`, so the upload has
+nothing to upload *to*. `POST /v1/apps` returns:
 
-Fastest by a wide margin, and the lane already proven on this team (every
-Momentum build to date was local `xcodebuild` + `altool`).
+    403 FORBIDDEN_ERROR
+    The resource 'apps' does not allow 'CREATE'.
+    Allowed operations are: GET_COLLECTION, GET_INSTANCE, UPDATE
 
-```bash
-xcodegen generate
-xcodebuild -scheme Groove -destination 'id=00008140-000E18EC1489801C' \
-  -allowProvisioningUpdates build
-xcrun devicectl device install app \
-  --device 00008140-000E18EC1489801C build/.../Groove.app
-```
+Apple allows reading and updating apps over the API but not creating them. It
+has to be done in the browser, once, and takes about two minutes.
 
-Phone plugged in or on the same Wi-Fi. Watch app installs with it. Use this
-whenever you're at the Mac — it's the only loop tight enough to iterate in.
+1. Go to **appstoreconnect.apple.com** → **Apps** → **+** → **New App**
+2. Fill in exactly:
+   - **Platforms** — tick **iOS** only
+   - **Name** — `Groove` *(if taken, anything unique; it's changeable later)*
+   - **Primary Language** — English (U.S.)
+   - **Bundle ID** — choose **Groove — com.connor.groove** from the dropdown.
+     It is already registered (Apple resource `BW3Y9S5B4L`), so it will be in
+     the list.
+   - **SKU** — `GROOVE001`
+   - **User Access** — Full Access
+3. **Create**. Nothing else — no screenshots, no description, no pricing. Those
+   are only needed for App Store review, and TestFlight doesn't need review.
 
-## Loop B — push to main, ~20-30 minutes
+Then either push any commit, or trigger the workflow by hand from the Actions
+tab, and the build lands in TestFlight roughly 10 minutes later.
 
-`.github/workflows/testflight.yml` builds on a macOS runner, signs, and uploads
-to TestFlight. You get a notification and tap update. Use it when you're away
-from the Mac, or to get a build onto a device that isn't yours.
+---
 
-Timing, honestly: 8-12 min build, 5-15 min Apple processing, then whenever you
-tap. It is not real-time and can't be made so.
+## What is already done
 
-### One-time setup
+- **Bundle IDs registered.** `com.connor.groove` did not exist in the developer
+  account — only `com.connor.groove.watchkitapp` did. Registered as
+  `BW3Y9S5B4L`.
+- **Repository secrets set** — `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`,
+  `TEAM_ID`. All four came from the credentials store; nothing had to be
+  exported off a Mac.
+- **Signing works.** The runner authenticates with the App Store Connect API
+  key and mints its own certificate and provisioning profiles
+  (`-allowProvisioningUpdates`). Run 31681656996 archived and exported a signed
+  `Groove.ipa` containing both the phone app and the watch app.
+- **It compiles.** `build-check.yml` proves it on every push: Xcode 16.4,
+  Swift 6.1.2, 16 files across both targets, zero errors.
 
-**1. Create the App Store Connect app record by hand.** `POST /v1/apps` returns
-403 — this is documented in the credentials registry (row 405) and there is no
-API path around it. App Store Connect → Apps → +, bundle ID `com.sharp.groove`.
+## Why the old workflow never worked
 
-**2. Add repo secrets** (Settings → Secrets → Actions). Everything except the
-certificate is already in the registry:
+It wanted a distribution certificate as a `.p12` plus two provisioning
+profiles, base64'd into four secrets that were never added. Every run since the
+repo was created died at "Import signing certificate" without ever reaching the
+compiler. It never needed any of them — Xcode signs from the API key alone.
 
-| Secret | Where it comes from |
-|---|---|
-| `ASC_KEY_ID` | registry — App Store Connect Admin key |
-| `ASC_ISSUER_ID` | registry — same row |
-| `ASC_KEY_P8` | the `.p8`, base64'd: `base64 -i AuthKey_XXX.p8 \| pbcopy` |
-| `DIST_CERT_P12` | export the distribution cert from Keychain, base64 it |
-| `DIST_CERT_PASSWORD` | whatever you set on export |
-| `PROFILE_IOS` | App Store profile for `com.sharp.groove`, base64'd |
-| `PROFILE_WATCH` | App Store profile for the watch extension, base64'd |
+## The two workflows
 
-Never commit any of these. The workflow reads them from the environment and
-deletes the decoded files in the same step.
+| workflow | when | what it proves |
+|---|---|---|
+| `build-check.yml` | every push | it compiles, both targets, no signing |
+| `testflight.yml` | every push | it builds, signs, and ships to your phone |
 
-**3. Cost.** macOS runners bill at 10x, so the free private-repo allowance is
-about 200 macOS-minutes a month — roughly 15-20 builds. The workflow ignores
-markdown-only pushes and cancels superseded runs, but if you're iterating hard
-you'll hit the ceiling. That's another argument for Loop A.
-
-## "Adjustments on the go"
-
-What that realistically means here:
-
-- **Settings** — handedness, sensitivity, duck tail, demo mode — change live in
-  Setup, no build required. `ConfigSync` pushes them to the watch mid-session.
-- **Detection tuning** — thresholds, dwell times, plateau parameters — currently
-  compiled in. If you want these adjustable on the go, they'd need lifting into
-  `Config` and exposing in Setup. Say the word and it's a small change.
-- **Anything structural** — new screens, new metrics, changed logic — needs a
-  build. There is no way around that.
-
-If the goal is tuning the detector at the range without a laptop, the honest fix
-isn't a faster pipeline. It's moving the parameters you actually want to turn
-into `Config`, so they're settings rather than code.
+Do not add `-sdk iphonesimulator` to either. It overrides the SDK for every
+target in the scheme including the embedded watch app, and watchOS sources then
+compile against iOS — `HKLiveWorkoutBuilder` comes back "unavailable in iOS".
+The destination alone resolves the right SDK per target.
