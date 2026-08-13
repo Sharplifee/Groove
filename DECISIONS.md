@@ -85,3 +85,18 @@ colours, so slate blue carries everything green used to. Primary buttons follow
 the theme's lead colour rather than always being Augusta green, otherwise every
 action on the screen would still read as Augusta whichever theme you picked.
 The band toggle now only appears on the two themes that don't wear one already.
+
+**11 — Compilation moved to CI rather than waiting on a Mac.** There is no route
+from this environment to the M1 Max — no shell tool reaches it, confirmed by
+searching the tool surface rather than assuming. But GitHub Actions runs macOS
+with real Xcode, which is a compiler I can reach. `build-check.yml` builds the
+app with the simulator SDK and signing disabled, so it needs no certificates and
+no secrets, and every push to main now proves the code compiles before it ever
+reaches a device.
+
+**12 — TestFlight has been failing since long before this rebuild.** Every run
+dies at "Import signing certificate": `DIST_CERT_P12`, `DIST_CERT_PASSWORD`,
+`PROFILE_IOS`, `PROFILE_WATCH`, `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_P8`
+were never added to the repository's secrets. Nothing to do with the code —
+the workflow has never once got as far as compiling. Adding those seven secrets
+is what turns a push into a build on the phone without touching Xcode at all.

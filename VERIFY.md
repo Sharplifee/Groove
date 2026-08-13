@@ -1,6 +1,31 @@
 # Phase 6 — verification
 
-## What has already been verified, and how
+## It compiles
+
+`.github/workflows/build-check.yml` builds the app on a macOS runner with real
+Xcode — simulator SDK, signing disabled, so it needs no certificates and no
+secrets. Run 31680803075 on `1b915e9`:
+
+    Xcode 16.4, Apple Swift 6.1.2
+    16 source files compiled across both the phone and watch targets
+    ** BUILD SUCCEEDED **
+    0 errors
+
+Every push to `main` re-runs it. Read the run summary for the error and warning
+list; the full log is attached as an artifact.
+
+Two errors on the first attempt turned out to be the workflow, not the code:
+`-sdk iphonesimulator` overrides the SDK for every target in the scheme,
+including the embedded watch app, so watchOS sources were compiled against the
+iOS SDK and `HKLiveWorkoutBuilder` came back unavailable. The destination alone
+resolves the right SDK per target. Don't re-add `-sdk`.
+
+Four warnings remain, all the same shape: `WatchController`'s
+`RoutineDetectorDelegate` methods are main-actor isolated where the protocol is
+nonisolated. Harmless under the Swift 5 language mode this project pins, and an
+error under Swift 6. Worth fixing before any move to Swift 6, not urgent now.
+
+## What else has been verified, and how
 
 A Swift 6.0.3 Linux toolchain was installed in the build container, so some of
 this is no longer a matter of inspection:
@@ -21,7 +46,8 @@ WatchConnectivity do not exist off Apple platforms, so none of the view code or
 the audio engine has been type-checked, and nothing has been run on hardware.
 Expect the first Xcode build to surface type errors in the view layer.
 
-Everything below still needs Xcode and the physical devices.
+Everything below still needs the physical devices. Compilation is now covered by
+CI; behaviour on hardware is not.
 
 Run it with:
 
@@ -29,16 +55,21 @@ Run it with:
     ./Tests/parse-all.sh && ./Tests/run-checks.sh
     xcodegen generate && open Groove.xcodeproj
 
-## 6.1 — every screen, both themes, populated and empty
+## 6.1 — every screen, all three themes, populated and empty
 
-| screen | Pines | Clubhouse | band on | band off | empty | populated |
-|---|---|---|---|---|---|---|
-| Today | | | | | | |
-| Form | | | | | | |
-| Setup | | | | | | |
-| Onboarding | | | | | | |
-| Watch | | | n/a | n/a | | |
-| iPad second screen | | | | | | |
+| screen | Pines | Clubhouse | Augusta | empty | populated |
+|---|---|---|---|---|---|
+| Today | | | | | |
+| Form | | | | | |
+| Setup | | | | | |
+| Onboarding | | | | | |
+| Watch | | n/a | n/a | | |
+| iPad second screen | | | | | |
+
+Augusta wears its green bar as part of its identity; the other two have it as an
+optional toggle. Check that Clubhouse now reads as clearly slate blue — lead
+accent, chart trace, tab tint and primary buttons all moved, which is the fix
+for the two light themes having been indistinguishable.
 
 The Xcode canvas covers most of this without a device — `DemoData.swift`
 carries previews for Today, Form, Setup, Onboarding, the paired screen, the
