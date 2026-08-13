@@ -40,6 +40,12 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
+      # Generic destination, not a named device. Runner images rotate their
+      # installed simulators, so naming one ties this workflow to whatever
+      # iPhone happened to ship with that image — macos-26 has no iPhone 16 Pro
+      # and the run dies with "Unable to find a device matching the provided
+      # destination specifier".
+      #
       # NOTE: do not add `-sdk iphonesimulator` here. It overrides the SDK for
       # every target in the scheme including the embedded watch app, so watchOS
       # code gets compiled against the iOS SDK and HealthKit's workout types
@@ -52,7 +58,7 @@ jobs:
             -project Groove.xcodeproj \
             -scheme Groove \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             2>&1 | tee build.log
