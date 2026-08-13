@@ -1,0 +1,75 @@
+name: Build check
+
+# Compiles the app on a real macOS runner with a real Xcode. No signing, no
+# upload, no device — the only question this answers is whether the code
+# actually builds, which is the question that cannot be answered anywhere
+# except on an Apple machine.
+#
+# Simulator SDK with signing disabled, so it needs no certificates, no
+# provisioning profiles and no secrets. Building the iOS scheme also builds the
+# embedded watch app, so one run covers both targets.
+#
+# macOS runners bill at 10x. A clean build here is a few minutes; the
+# concurrency group cancels superseded runs so a burst of pushes doesn't stack.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+concurrency:
+  group: build-check
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      # Fails loudly with every diagnostic rather than stopping at the first,
+      # so one run surfaces the whole list instead of one error per push.
+      - name: Build iPhone + Watch
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Groove.xcodeproj \
+            -scheme Groove \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=YES \
+            2>&1 | tee build.log
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          echo "### Errors" >> $GITHUB_STEP_SUMMARY
+          grep -E "error:" build.log | sort -u | head -100 >> $GITHUB_STEP_SUMMARY || \
+            echo "none" >> $GITHUB_STEP_SUMMARY
+          echo "### Warnings" >> $GITHUB_STEP_SUMMARY
+          grep -E "warning:" build.log | sort -u | head -60 >> $GITHUB_STEP_SUMMARY || \
+            echo "none" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
