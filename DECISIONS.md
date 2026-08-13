@@ -114,3 +114,13 @@ exports a real IPA containing both the phone and watch apps.
 'apps' does not allow 'CREATE'". Creating the App Store Connect app record has
 to happen in the browser. Everything either side of it is automated. See
 DEPLOY.md.
+
+**15 — Runner moved to macos-26.** The first upload past the app-record fix died
+on an Apple policy check, not on anything in the code: uploads must be built
+with the iOS 26 SDK or later, and `macos-15` ships Xcode 16.4. Both workflows now
+run on `macos-26` and select the newest Xcode present rather than pinning a
+version, so the next SDK floor raise doesn't break the pipeline again.
+
+**16 — Shipped.** Run 31683442498 archived, signed, exported and uploaded.
+Build 15 processed to VALID on app 6801063220, "GROOVIE Golf". The pipeline is
+end-to-end: push to main, and it reaches TestFlight without a Mac in the loop.

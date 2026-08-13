@@ -1,17 +1,22 @@
-# Getting Groove onto the phone
+# Getting GROOVIE Golf onto the phone
 
 Push to `main` → GitHub builds, signs, and ships to TestFlight → it appears on
 your phone. No Mac, no cable, no Xcode.
 
-That pipeline is built and working except for **one step Apple will not let any
-API perform**. Do it once and every push after that is automatic.
+**This works.** Build 15 uploaded 2026-08-13 and processed to VALID.
+App `6801063220`, bundle `com.connor.groove`.
+
+To get it on the phone the first time: App Store Connect → TestFlight → add
+yourself as an internal tester, then install the TestFlight app on the iPhone.
+After that every push replaces the build automatically.
 
 ---
 
-## The one manual step
+## The one-time setup (already done)
 
-App Store Connect has no app record for `com.connor.groove`, so the upload has
-nothing to upload *to*. `POST /v1/apps` returns:
+App Store Connect needed an app record for `com.connor.groove` before anything
+could be uploaded to it — done, "GROOVIE Golf", app ID `6801063220`. Apple
+refuses to create one over the API; `POST /v1/apps` returns:
 
     403 FORBIDDEN_ERROR
     The resource 'apps' does not allow 'CREATE'.
@@ -67,7 +72,17 @@ compiler. It never needed any of them — Xcode signs from the API key alone.
 | `build-check.yml` | every push | it compiles, both targets, no signing |
 | `testflight.yml` | every push | it builds, signs, and ships to your phone |
 
-Do not add `-sdk iphonesimulator` to either. It overrides the SDK for every
+### Two things not to undo
+
+**Runner image.** Both workflows run on `macos-26` and select the newest Xcode
+present. Apple rejects any upload built against an older SDK — "This app was
+built with the iOS 18.5 SDK. All iOS and iPadOS apps must be built with the iOS
+26 SDK or later." The `macos-15` runner ships Xcode 16.4, so every archive built
+there is dead on arrival at validation no matter how good the code is. The step
+picks the newest Xcode rather than pinning a version, so the next time Apple
+raises the floor this keeps working.
+
+**SDK flag.** Do not add `-sdk iphonesimulator` to either. It overrides the SDK for every
 target in the scheme including the embedded watch app, and watchOS sources then
 compile against iOS — `HKLiveWorkoutBuilder` comes back "unavailable in iOS".
 The destination alone resolves the right SDK per target.
