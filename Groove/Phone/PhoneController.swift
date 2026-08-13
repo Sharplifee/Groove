@@ -421,11 +421,30 @@ extension PhoneController: WCSessionDelegate {
         let confidence = payload["confidence"] as? Double ?? 0
         let sentDiscipline = (payload["discipline"] as? String)
             .flatMap(Discipline.init(rawValue:))
+
+        // `transferUserInfo` is durable: an event that couldn't be delivered
+        // live is kept and handed over the next time this app launches, which
+        // can be hours later. Acting on one of those as though it were live
+        // starts a session nobody asked for — and starting a session touches
+        // the player's audio.
+        //
+        // Three states, not two. An unstamped event means the watch is on an
+        // older build than the phone, which happens routinely because watch
+        // updates lag; those are handled as before rather than dropped, but
+        // they are never allowed to start a session on their own.
+        let age = (payload["sentAt"] as? TimeInterval)
+            .map { Date().timeIntervalSince1970 - $0 }
+        let isStale = (age ?? 0) > 60
+        let isFresh = age.map { $0 <= 60 } ?? false
+        if isStale { return }
+
         Task { @MainActor in
             if let sentDiscipline { self.discipline = sentDiscipline }
             // Late-join safety net: if we somehow missed sessionStart, a live
-            // arm event still brings the phone up.
-            if !self.isSessionLive, event == "arm" || event == "takeaway" {
+            // arm event still brings the phone up. Only a *live* one — a queued
+            // event replayed at launch would open an audio session and cut
+            // whatever the player is listening to, for no reason at all.
+            if !self.isSessionLive, isFresh, event == "arm" || event == "takeaway" {
                 self.mirrorSessionStart()
             }
             self.handle(event: event, confidence: confidence)

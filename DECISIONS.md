@@ -218,3 +218,30 @@ putting stays silent.
 game gets near the accelerometer's limit, so "peak numbers are a floor" was
 misleading everywhere except full swings. `canSaturateSensor` gates it, and the
 Setup copy no longer implies a driver.
+
+**24 — Opening the app killed Apple Music. Two bugs, compounding.**
+
+*The session was recording when it had no reason to.* `startSession` asked for
+`.playAndRecord` and held it for the whole round. Activating a recording
+category is an intrusive act — iOS reads it as the app wanting the microphone,
+and the player's audio can be interrupted even with `.mixWithOthers` set. The
+keepalive tier has no reason to record; it exists so iOS keeps the app alive in
+a pocket. It is now `.playback`, and the microphone is engaged in `arm()` only,
+about a second before a swing, then dropped again in `stopCapture()`. This also
+means the orange microphone dot appears for a second per swing instead of for a
+whole round.
+
+Worth noting this is *not* the two-tier design that was removed earlier. That
+one existed because `.allowBluetooth` forced HFP and the record tier had to be
+kept short to protect audio quality. Without `.allowBluetooth` the switch is
+free, so this tiering is about not asking for permissions the app isn't using.
+
+*A queued event was replaying at launch.* The watch sends over `sendMessage`
+and falls back to `transferUserInfo`, which is durable — an undelivered event is
+kept and handed over the next time the phone app launches, potentially hours
+later. The late-join safety net then treated a months-old `arm` as live and
+called `mirrorSessionStart()`, which opened an audio session and cut the music.
+Events are now stamped on the watch, and anything older than a minute is
+discarded. Unstamped events — a watch on an older build than the phone, which
+happens routinely — are still handled, but are never allowed to start a session
+on their own.

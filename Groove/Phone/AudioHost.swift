@@ -103,17 +103,32 @@ final class LocalAudioHost: NSObject, AudioHost {
 
     // MARK: - Session
 
+    /// `.allowBluetooth` is deliberately absent and must stay absent - it is
+    /// what negotiates HFP and collapses the player's music to mono.
     private var baseOptions: AVAudioSession.CategoryOptions {
-        // `.allowBluetooth` is deliberately absent and must stay absent - it is
-        // what negotiates HFP and collapses the player's music to mono.
-        [.allowBluetoothA2DP, .mixWithOthers, .defaultToSpeaker]
+        [.allowBluetoothA2DP, .mixWithOthers]
+    }
+
+    /// Options for the recording tier. `.defaultToSpeaker` only belongs here —
+    /// on `.playback` it does nothing, and on an idle session it invites a route
+    /// change the player never asked for.
+    private var recordOptions: AVAudioSession.CategoryOptions {
+        baseOptions.union(.defaultToSpeaker)
     }
 
     /// Called once when the range session starts and held until it ends.
+    ///
+    /// Deliberately `.playback`, not `.playAndRecord`. Activating a recording
+    /// category is an intrusive act: iOS treats it as the app wanting the
+    /// microphone, and whatever the player was listening to can be interrupted
+    /// even with `.mixWithOthers` set. The keepalive tier has no reason to
+    /// record — it exists purely so iOS keeps the app running in a pocket — so
+    /// it asks for nothing it doesn't need. The microphone is only engaged in
+    /// `arm()`, roughly a second before a swing.
     func startSession() throws {
         guard !isAlive else { return }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: baseOptions)
+        try session.setCategory(.playback, mode: .default, options: baseOptions)
         try session.setActive(true)
 
         let outFormat = engine.outputNode.inputFormat(forBus: 0)
@@ -168,7 +183,7 @@ final class LocalAudioHost: NSObject, AudioHost {
             isArmed = false
         case .ended:
             let session = AVAudioSession.sharedInstance()
-            try? session.setCategory(.playAndRecord, mode: .default, options: baseOptions)
+            try? session.setCategory(.playback, mode: .default, options: baseOptions)
             try? session.setActive(true)
             if !engine.isRunning { try? engine.start() }
         @unknown default: break
@@ -186,6 +201,17 @@ final class LocalAudioHost: NSObject, AudioHost {
         _ = route
         guard isAlive else { throw AudioError.sessionNotStarted }
         guard !isArmed else { return }
+
+        // Step up to the recording tier only now. This is the one moment the
+        // microphone is needed, and it happens about a second before the ball
+        // is struck — the app is not holding the mic open across a whole round.
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .default, options: recordOptions)
+
+        // The engine has to be rebuilt around the new category or the input node
+        // reports a zero format and the tap silently captures nothing.
+        engine.stop()
+        try engine.start()
 
         let input = engine.inputNode
         let format = input.inputFormat(forBus: 0)
@@ -222,6 +248,13 @@ final class LocalAudioHost: NSObject, AudioHost {
         guard isArmed else { return }
         engine.inputNode.removeTap(onBus: 0)
         isArmed = false
+        // Drop straight back to the non-recording tier. Holding `.playAndRecord`
+        // between swings shows the orange microphone dot for the whole round and
+        // gives iOS a reason to interrupt the player's audio that it does not
+        // need to have.
+        guard isAlive else { return }
+        try? AVAudioSession.sharedInstance()
+            .setCategory(.playback, mode: .default, options: baseOptions)
     }
 
     // MARK: - Duck and burst
@@ -232,9 +265,11 @@ final class LocalAudioHost: NSObject, AudioHost {
     func duckForTakeaway() {
         guard isAlive, !isDucked else { return }
         restoreWork?.cancel()
-        try? AVAudioSession.sharedInstance()
-            .setCategory(.playAndRecord, mode: .default,
-                         options: baseOptions.union(.duckOthers))
+        // Whichever tier is current, add ducking to it rather than assuming one.
+        let session = AVAudioSession.sharedInstance()
+        let category: AVAudioSession.Category = isArmed ? .playAndRecord : .playback
+        let options = (isArmed ? recordOptions : baseOptions).union(.duckOthers)
+        try? session.setCategory(category, mode: .default, options: options)
         isDucked = true
     }
 
@@ -302,8 +337,10 @@ final class LocalAudioHost: NSObject, AudioHost {
 
     private func unduck() {
         guard isAlive else { return }
+        let category: AVAudioSession.Category = isArmed ? .playAndRecord : .playback
         try? AVAudioSession.sharedInstance()
-            .setCategory(.playAndRecord, mode: .default, options: baseOptions)
+            .setCategory(category, mode: .default,
+                         options: isArmed ? recordOptions : baseOptions)
         isDucked = false
     }
 

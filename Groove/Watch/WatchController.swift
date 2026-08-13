@@ -193,6 +193,11 @@ final class WatchController: NSObject, ObservableObject {
     }
 
     private func send(_ payload: [String: Any]) {
+        var payload = payload
+        // Stamped so the phone can tell a live event from one that has been
+        // sitting in the queue since a previous round. `transferUserInfo`
+        // delivers durably — including on the next app launch, hours later.
+        payload["sentAt"] = Date().timeIntervalSince1970
         let s = WCSession.default
         guard s.activationState == .activated else { return }
         if s.isReachable {
