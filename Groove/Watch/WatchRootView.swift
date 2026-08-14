@@ -30,21 +30,23 @@ struct WatchRootView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("GROOVE").font(.system(size: 14, weight: .heavy, design: .rounded))
+        ScrollView {
+        VStack(alignment: .leading, spacing: 5) {
+            // One line where there were three: brand left, state right. A
+            // watch face has no vertical budget for a masthead.
+            HStack(alignment: .firstTextBaseline) {
+                Text("GROOVE").font(.system(size: 13, weight: .heavy, design: .rounded))
                 Spacer()
-                if c.isRunning {
-                    Circle().fill(accent).frame(width: 7, height: 7)
+                HStack(spacing: 4) {
+                    if c.isRunning { Circle().fill(accent).frame(width: 6, height: 6) }
+                    Text(label)
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundStyle(accent)
+                        .contentTransition(.opacity)
                 }
             }
 
-            Text(label)
-                .font(.system(size: 17, weight: .heavy, design: .rounded))
-                .foregroundStyle(accent)
-                .contentTransition(.opacity)
-
-            Text(sub).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            Text(sub).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
 
             // Without the phone app alive, events queue instead of firing and
             // the music never drops. Say so rather than pretend.
@@ -65,7 +67,7 @@ struct WatchRootView: View {
                     .lineLimit(2)
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 2)
 
             // The in-round HUD. One glance between shots answers the two
             // questions that matter mid-session: what did that one do, and am
@@ -79,7 +81,7 @@ struct WatchRootView: View {
                     Text("TEMPO").font(.system(size: 9)).foregroundStyle(.secondary)
                     HStack(alignment: .lastTextBaseline, spacing: 3) {
                         Text(c.lastTempo > 0 ? String(format: "%.1f", c.lastTempo) : "—")
-                            .font(.system(size: 22, weight: .heavy, design: .monospaced))
+                            .font(.system(size: 19, weight: .heavy, design: .monospaced))
                             .foregroundStyle(gold)
                             .contentTransition(.numericText())
                         if c.lastTempo > 0 {
@@ -91,12 +93,14 @@ struct WatchRootView: View {
 
             if c.tempos.count >= 2 {
                 TempoStrip(tempos: Array(c.tempos.suffix(7)))
-                    .frame(height: 20)
+                    .frame(height: 15)
             }
 
-            Text("\(c.rehearsalCount) practice \(c.discipline.strokeWord)s")
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
+            if c.rehearsalCount > 0 {
+                Text("\(c.rehearsalCount) practice \(c.discipline.strokeWord)s")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+            }
 
             // Only before a session. Traces from two disciplines must never
             // stack together, so switching mid-session is refused rather than
@@ -120,6 +124,7 @@ struct WatchRootView: View {
             .tint(c.isRunning ? .red : .green)
         }
         .padding(.horizontal, 4)
+        }
         .task { await c.requestAuthorization() }
     }
 
@@ -128,7 +133,7 @@ struct WatchRootView: View {
     private func stat(_ k: String, _ v: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(k).font(.system(size: 9)).foregroundStyle(.secondary)
-            Text(v).font(.system(size: 22, weight: .heavy, design: .monospaced))
+            Text(v).font(.system(size: 19, weight: .heavy, design: .monospaced))
                 .contentTransition(.numericText())
         }
     }
@@ -149,7 +154,7 @@ struct TempoStrip: View {
                 let clamped = max(-0.3, min(0.3, dev))
                 Capsule()
                     .fill(abs(dev) <= 0.10 ? Color.green : Color.orange)
-                    .frame(width: 7, height: 8 + CGFloat(abs(clamped)) * 36)
+                    .frame(width: 6, height: 6 + CGFloat(abs(clamped)) * 26)
             }
             Spacer(minLength: 0)
         }
@@ -206,15 +211,18 @@ struct WatchPreview: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("GROOVE").font(.system(size: 14, weight: .heavy, design: .rounded))
+        ScrollView {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("GROOVE").font(.system(size: 13, weight: .heavy, design: .rounded))
                 Spacer()
-                if running { Circle().fill(accent).frame(width: 7, height: 7) }
+                HStack(spacing: 4) {
+                    if running { Circle().fill(accent).frame(width: 6, height: 6) }
+                    Text(label).font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundStyle(accent)
+                }
             }
-            Text(label).font(.system(size: 17, weight: .heavy, design: .rounded))
-                .foregroundStyle(accent)
-            Text(sub).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            Text(sub).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             if running && !phone {
                 Text("Phone not responding")
                     .font(.system(size: 10)).foregroundStyle(.orange)
@@ -231,28 +239,29 @@ struct WatchPreview: View {
                     Text("TEMPO").font(.system(size: 9)).foregroundStyle(.secondary)
                     HStack(alignment: .lastTextBaseline, spacing: 3) {
                         Text("3.0")
-                            .font(.system(size: 22, weight: .heavy, design: .monospaced))
+                            .font(.system(size: 19, weight: .heavy, design: .monospaced))
                             .foregroundStyle(Color(red: 0.988, green: 0.890, blue: 0.000))
                         Text(":1").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
             }
             TempoStrip(tempos: [3.02, 2.96, 3.05, 2.71, 3.01, 2.98, 3.03])
-                .frame(height: 20)
-            Text("41 practice swings").font(.system(size: 9)).foregroundStyle(.secondary)
+                .frame(height: 15)
+            Text("41 practice swings").font(.system(size: 8)).foregroundStyle(.secondary)
             Button { } label: {
                 Text(running ? "End" : "Start").frame(maxWidth: .infinity)
             }
             .tint(running ? .red : .green)
         }
         .padding(.horizontal, 4)
+        }
     }
 
 
     private func stat(_ k: String, _ v: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(k).font(.system(size: 9)).foregroundStyle(.secondary)
-            Text(v).font(.system(size: 22, weight: .heavy, design: .monospaced))
+            Text(v).font(.system(size: 19, weight: .heavy, design: .monospaced))
                 .contentTransition(.numericText())
         }
     }

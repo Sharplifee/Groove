@@ -40,7 +40,7 @@ final class WatchController: NSObject, ObservableObject {
     @Published var discipline: Discipline = .fullSwing {
         didSet {
             guard !isRunning else { discipline = oldValue; return }
-            detector.discipline = discipline
+            queue.addOperation { [self] in detector.discipline = discipline }
         }
     }
 
@@ -94,8 +94,10 @@ final class WatchController: NSObject, ObservableObject {
 
     /// Applied whenever the phone pushes new settings, mid-session included.
     func apply(_ config: Config) {
-        detector.config = config
-        detector.discipline = discipline
+        queue.addOperation { [self] in
+            detector.config = config
+            detector.discipline = discipline
+        }
         config.save()               // local cache for a cold start with no phone
         phoneConfigured = true
     }
@@ -127,9 +129,12 @@ final class WatchController: NSObject, ObservableObject {
 
             // Prefer the phone's config over our local copy — UserDefaults do
             // not cross devices, so the local one is almost certainly defaults.
-            detector.config = ConfigSync.currentFromPhone() ?? Config.load()
-            detector.discipline = discipline
-            detector.reset()
+            let cfg = ConfigSync.currentFromPhone() ?? Config.load()
+            queue.addOperation { [self] in
+                detector.config = cfg
+                detector.discipline = discipline
+                detector.reset()
+            }
             t0 = Date()
             sessionID = UUID()
             struckCount = 0
@@ -146,7 +151,13 @@ final class WatchController: NSObject, ObservableObject {
                     accel: SIMD3(dm.userAcceleration.x, dm.userAcceleration.y, dm.userAcceleration.z),
                     rotation: SIMD3(dm.rotationRate.x, dm.rotationRate.y, dm.rotationRate.z),
                     gravity: SIMD3(dm.gravity.x, dm.gravity.y, dm.gravity.z))
-                Task { @MainActor in self.detector.ingest(frame) }
+                // Already on the serial capture queue — feed the detector
+                // here. The old version allocated a main-actor Task for every
+                // frame, a hundred a second, which ran the whole detector on
+                // the UI thread in a straight fight with SwiftUI rendering —
+                // that was the on-wrist lag. Delegate events (a few per swing,
+                // not per frame) hop to main inside their handlers instead.
+                self.detector.ingest(frame)
             }
             isRunning = true
             status = "Watching"
@@ -217,7 +228,12 @@ final class WatchController: NSObject, ObservableObject {
 // MARK: - Detector delegate
 
 extension WatchController: RoutineDetectorDelegate {
-    func detectorDidArm(confidence: Double) {
+    // The detector fires these from the capture queue now. Each hops to the
+    // main actor once per EVENT — a few per swing — where the old design paid
+    // that price per FRAME. Sub-millisecond scheduling on a path where the
+    // phone's audio ramp is the long pole anyway.
+    nonisolated func detectorDidArm(confidence: Double) {
+      Task { @MainActor in
         state = .armed
         armConfidence = confidence
         // Arming early gives the phone time to open the record session before
@@ -226,14 +242,18 @@ extension WatchController: RoutineDetectorDelegate {
         // The only haptic you feel before a shot, and it lands while you're
         // still — never mid-motion.
         Haptic.arm()
+      }
     }
 
-    func detectorDidDisarm() {
+    nonisolated func detectorDidDisarm() {
+      Task { @MainActor in
         state = .watching
         send(["event": "disarm"])
+      }
     }
 
-    func detectorDidFireTakeaway(confidence: Double) {
+    nonisolated func detectorDidFireTakeaway(confidence: Double) {
+      Task { @MainActor in
         state = .swinging
         // A putt has almost no sound worth exposing, so ducking forty times an
         // hour on a practice green would be pure irritation. The stroke is still
@@ -242,9 +262,11 @@ extension WatchController: RoutineDetectorDelegate {
         send(["event": "takeaway", "confidence": confidence])
         // Deliberately silent. Buzzing a player's wrist at the instant their
         // backswing starts is the worst possible moment to interrupt them.
+      }
     }
 
-    func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) {
+    nonisolated func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) {
+      Task { @MainActor in
         state = .recovering
 
         // Only tell the phone to touch audio if this swing actually armed it.
@@ -270,6 +292,7 @@ extension WatchController: RoutineDetectorDelegate {
         spool.enqueue(stamped)
         flushSpool()
         unsentSwings = spool.count
+      }
     }
 }
 

@@ -316,3 +316,17 @@ times a second (it's owned by its capture queue now, snapshotted on read),
 and the strike-window mic prefers a plugged-in external input — USB, wired
 headset, line-in — over the grille mic lying face-up in grass. Bluetooth
 mics stay excluded; that lesson is DECISIONS 24.
+
+## 30. The watch face fits, and the detector leaves the UI thread
+
+Two on-wrist faults, one cause each. Lag: every motion frame allocated a
+main-actor Task and ran the whole detector on the UI thread — a hundred
+scheduler hops a second fighting SwiftUI for the same core. The detector now
+runs on the serial capture queue it already shared with the motion callback,
+single-threaded by construction (config and discipline writes route through
+the same queue), and only fired events — a few per swing — hop to main.
+Overlap: the face carried a three-line masthead plus fixed-size stats sized
+past a 40 mm screen once a warning row appeared. Brand and state share one
+line now, type and the strip are tightened to fit the smallest face with
+headroom, and the stack scrolls so stacked warnings push content down instead
+of into each other. WatchPreview mirrors all of it.
