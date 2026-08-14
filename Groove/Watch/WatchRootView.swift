@@ -106,14 +106,27 @@ struct WatchRootView: View {
             // stack together, so switching mid-session is refused rather than
             // silently mixing a putt into a full-swing ensemble.
             if !c.isRunning {
-                Picker("", selection: Binding(get: { c.discipline },
-                                              set: { c.discipline = $0 })) {
+                // Four chips in one row, replacing the navigationLink picker
+                // that rendered as a giant unlabeled pill jammed against the
+                // Start button — the worst offender in the overlap screenshot.
+                // All four options visible at once, one tap, 26 points tall.
+                HStack(spacing: 4) {
                     ForEach(Discipline.allCases) { d in
-                        Text(d.shortLabel).tag(d)
+                        Button { c.discipline = d } label: {
+                            Text(d.shortLabel)
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.vertical, 5)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.plain)
+                        .background(c.discipline == d ? Color.green.opacity(0.22)
+                                                      : Color.white.opacity(0.08),
+                                    in: Capsule())
+                        .foregroundStyle(c.discipline == d ? Color.green : Color.secondary)
+                        .accessibilityLabel(d.label)
+                        .accessibilityAddTraits(c.discipline == d ? .isSelected : [])
                     }
                 }
-                .pickerStyle(.navigationLink)
-                .frame(height: 32)
             }
 
             Button {
