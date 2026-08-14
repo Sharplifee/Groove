@@ -174,6 +174,18 @@ enum Discipline: String, Codable, CaseIterable, Identifiable, Sendable {
         self == .fullSwing ? "tour average" : "typical"
     }
 
+    /// Peak wrist rotation of a committed swing at this discipline — the
+    /// intensity the impact floors were calibrated against. Feeds the
+    /// intensity scaling so a warm-up half swing isn't judged on a
+    /// full-commitment floor.
+    var referenceRotation: Double { 22.0 * motionScale }
+
+    /// Takeaway trigger, scaled to the discipline. The old fixed 1.4 rad/s was
+    /// tuned on the full swing; a putting stroke or a soft pitch never crosses
+    /// it and the motion goes entirely unseen. Floored above the stillness
+    /// gate (0.35) so idle wrist noise can't start a swing.
+    var takeawayThreshold: Double { max(0.45, 1.2 * motionScale) }
+
     /// Whether dropping the music is worth doing.
     ///
     /// The duck exists to expose the strike. An iron has a compression note that

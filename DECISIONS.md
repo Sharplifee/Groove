@@ -330,3 +330,23 @@ past a 40 mm screen once a warning row appeared. Brand and state share one
 line now, type and the strip are tightened to fit the smallest face with
 headroom, and the stack scrolls so stacked warnings push content down instead
 of into each other. WatchPreview mirrors all of it.
+
+## 31. The strike floor scales with the swing, and takeaway scales with the discipline
+
+Field report from the range: real strikes going unlogged. Two rigidities, both
+fixed at the physics level rather than with a "loose mode" setting.
+
+The impact thresholds were full-commitment floors — 110 is a FULL pitching
+wedge — but nobody swings at full commitment out of the gates; a warm-up
+half-seven still strikes the ball with proportionally less shock, and the
+fixed floor logged those as rehearsals. Impact shock scales with clubhead
+speed, which scales with wrist rotation, so the floor now scales with each
+swing's own peak rotation (never below 35% of base). Separation from
+rehearsals survives because a ball strike is a discontinuity an order sharper
+than a turf brush at the same speed.
+
+The takeaway trigger was a fixed 1.4 rad/s tuned on the full swing — a putting
+stroke or soft pitch never crossed it and went entirely unseen. It scales with
+the discipline's motion range now, floored above the stillness gate so idle
+wrist noise still can't start a swing. Both behaviours are pinned in the
+harness, including the exact warm-up-strike case the range visit exposed.

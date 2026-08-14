@@ -275,5 +275,51 @@ do {
           !SwingAnalyzer.isOnBody(Array(pocket.prefix(5))))
 }
 
+
+// MARK: - Intensity-scaled strike floor
+
+// The warm-up problem, pinned: a half-intensity swing with a real (softer)
+// strike must be caught; a smooth rehearsal at the same softness must not.
+do {
+    let d = Discipline.fullSwing
+    let full = SwingAnalyzer.effectiveImpactThreshold(
+        base: d.wristImpactThreshold, peakRotation: d.referenceRotation,
+        referenceRotation: d.referenceRotation)
+    check("floor: a committed swing keeps the calibrated threshold",
+          abs(full - d.wristImpactThreshold) < 0.001)
+
+    let half = SwingAnalyzer.effectiveImpactThreshold(
+        base: d.wristImpactThreshold, peakRotation: d.referenceRotation * 0.5,
+        referenceRotation: d.referenceRotation)
+    check("floor: half intensity halves the threshold", abs(half - 55) < 0.001)
+
+    let lazy = SwingAnalyzer.effectiveImpactThreshold(
+        base: d.wristImpactThreshold, peakRotation: 1.0,
+        referenceRotation: d.referenceRotation)
+    check("floor: the floor never drops below 35% of base",
+          abs(lazy - d.wristImpactThreshold * 0.35) < 0.001)
+
+    // A warm-up strike around jerk 60 was invisible to the fixed 110 floor
+    // and is caught at half intensity now.
+    check("floor: the warm-up strike the range visit exposed is now caught",
+          60 > half && 60 < d.wristImpactThreshold)
+    // A smooth practice swing's jerk stays under even the lowest floor.
+    check("floor: a smooth rehearsal stays below the minimum floor",
+          25 < d.wristImpactThreshold * 0.35 + 15 && 25 < half)
+}
+
+// Takeaway scales with the discipline: the short game is visible now, and
+// idle wrist noise still can't start a swing.
+do {
+    check("takeaway: full swing keeps a committed trigger",
+          Discipline.fullSwing.takeawayThreshold > 1.0)
+    check("takeaway: a putting stroke can actually trip it",
+          Discipline.putting.takeawayThreshold < 0.5)
+    for d in Discipline.allCases {
+        check("takeaway: \(d.rawValue) trigger sits above the stillness gate",
+              d.takeawayThreshold > 0.35)
+    }
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

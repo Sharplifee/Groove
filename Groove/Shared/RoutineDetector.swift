@@ -106,6 +106,7 @@ final class RoutineDetector {
     private var settleStart: TimeInterval?
     private var armedAt: TimeInterval?
     private var takeawayIdx: Int?
+    private var swingPeakRotation: Double = 0
     private var armConfidence: Double = 0
     private var isArmed = false
     private var wasArmedForThisSwing = false
@@ -156,7 +157,8 @@ final class RoutineDetector {
 
         // A takeaway is tracked from any non-swinging state, armed or not.
         if state != .swinging, state != .recovering,
-           SwingAnalyzer.isTakeaway(Array(buffer.suffix(8))) {
+           SwingAnalyzer.isTakeaway(Array(buffer.suffix(8)),
+                                    threshold: discipline.takeawayThreshold) {
             beginSwing()
             return
         }
@@ -213,6 +215,7 @@ final class RoutineDetector {
     }
 
     private func beginSwing() {
+        swingPeakRotation = 0
         takeawayIdx = max(0, buffer.count - 8)
         wasArmedForThisSwing = isArmed
         state = .swinging
@@ -227,8 +230,15 @@ final class RoutineDetector {
         let elapsed = f.t - buffer[takeaway].t
         let tail = Int(discipline.tracePost * SwingAnalyzer.fs)
 
+        // Running peak, kept incrementally — this is what scales the floor.
+        swingPeakRotation = max(swingPeakRotation, f.rotationMagnitude)
+        let floor = SwingAnalyzer.effectiveImpactThreshold(
+            base: discipline.wristImpactThreshold,
+            peakRotation: swingPeakRotation,
+            referenceRotation: discipline.referenceRotation)
+
         if let impact = SwingAnalyzer.impactIndex(buffer, from: takeaway,
-                                                  threshold: discipline.wristImpactThreshold),
+                                                  threshold: floor),
            buffer.count - impact > tail {
             complete(takeaway: takeaway, impact: impact)
             return

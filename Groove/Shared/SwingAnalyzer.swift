@@ -135,6 +135,26 @@ enum SwingAnalyzer {
         return nil
     }
 
+    /// Impact threshold scaled to the swing that's actually happening.
+    ///
+    /// The discipline thresholds are full-intensity floors — 110 is a FULL
+    /// pitching wedge. But nobody swings at full intensity out of the gates: a
+    /// warm-up half-seven still strikes the ball, with proportionally less
+    /// shock, and a fixed floor silently logs those as rehearsals. Impact
+    /// shock scales with clubhead speed, which scales with wrist rotation, so
+    /// the floor scales with the swing's own peak rotation instead: a swing at
+    /// half the reference intensity earns half the threshold, never below 35%
+    /// of base. Separation from rehearsals survives because a ball strike is a
+    /// discontinuity an order sharper than a turf brush at the same speed —
+    /// the smooth deceleration of a practice swing stays under even the floor.
+    static func effectiveImpactThreshold(base: Double,
+                                         peakRotation: Double,
+                                         referenceRotation: Double) -> Double {
+        guard referenceRotation > 0 else { return base }
+        let intensity = max(0.35, min(1.0, peakRotation / referenceRotation))
+        return base * intensity
+    }
+
     /// Whether the device that produced this window was riding on a body or
     /// sitting on the ground. A pocketed phone during a swing sees sustained
     /// hip rotation and a churning gravity vector; a phone parked by the ball
