@@ -85,7 +85,7 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
-          pip3 install --quiet pyjwt cryptography
+          pip3 install --quiet --break-system-packages pyjwt cryptography
           python3 - <<'PRUNE'
           import json, os, time, urllib.request, jwt
           kid, iss = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
