@@ -208,6 +208,17 @@ final class LocalAudioHost: NSObject, AudioHost {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default, options: recordOptions)
 
+        // If a better microphone is plugged in, use it. A wired lav, a USB-C
+        // interface or a headset mic beats the phone speaker-grille mic lying
+        // face-up in grass. Bluetooth microphones stay excluded on purpose —
+        // opening HFP for a mic collapses the music to phone-call quality
+        // (that lesson is DECISIONS 24) — so only physical inputs qualify.
+        // Nothing happens on failure; the built-in mic is a fine default.
+        let external: [AVAudioSession.Port] = [.usbAudio, .headsetMic, .lineIn]
+        if let plugged = session.availableInputs?.first(where: { external.contains($0.portType) }) {
+            try? session.setPreferredInput(plugged)
+        }
+
         // The engine has to be rebuilt around the new category or the input node
         // reports a zero format and the tap silently captures nothing.
         engine.stop()

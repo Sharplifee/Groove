@@ -135,6 +135,22 @@ enum SwingAnalyzer {
         return nil
     }
 
+    /// Whether the device that produced this window was riding on a body or
+    /// sitting on the ground. A pocketed phone during a swing sees sustained
+    /// hip rotation and a churning gravity vector; a phone parked by the ball
+    /// or under a bag sees near-stillness with, at worst, one sharp
+    /// ground-shock transient from the strike a foot away — which is exactly
+    /// the transient that would otherwise fake a hip "impact" and turn into a
+    /// garbage sequencing number. Median rotation is used so that single spike
+    /// cannot vote; a transient moves a mean, not a median.
+    static func isOnBody(_ frames: [MotionFrame],
+                         rotationFloor: Double = 0.15) -> Bool {
+        guard frames.count >= 10 else { return false }
+        let rots = frames.map(\.rotationMagnitude).sorted()
+        let median = rots[rots.count / 2]
+        return median > rotationFloor
+    }
+
     /// Watch accelerometers clip around ±16 g and the Series 7 has no high-g
     /// sensor. If we're pinned, peak values are a floor, not a measurement.
     static func didClip(_ frames: [MotionFrame], limit: Double = 15.6) -> Bool {

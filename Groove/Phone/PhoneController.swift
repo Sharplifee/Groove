@@ -206,11 +206,14 @@ final class PhoneController: NSObject, ObservableObject {
                 accel: SIMD3(dm.userAcceleration.x, dm.userAcceleration.y, dm.userAcceleration.z),
                 rotation: SIMD3(dm.rotationRate.x, dm.rotationRate.y, dm.rotationRate.z),
                 gravity: SIMD3(dm.gravity.x, dm.gravity.y, dm.gravity.z))
-            Task { @MainActor in
-                self.pelvis.append(f)
-                let cap = Int(SwingAnalyzer.fs * 15)
-                if self.pelvis.count > cap { self.pelvis.removeFirst(self.pelvis.count - cap) }
-            }
+            // Already on the serial capture queue — mutate in place. The old
+            // version hopped to the main actor for every frame, which is a
+            // hundred main-thread tasks a second for an entire session, spent
+            // on a buffer the UI never reads. The buffer is owned by this
+            // queue now; readers snapshot through it.
+            self.pelvis.append(f)
+            let cap = Int(SwingAnalyzer.fs * 15)
+            if self.pelvis.count > cap { self.pelvis.removeFirst(self.pelvis.count - cap) }
         }
     }
 
@@ -316,11 +319,22 @@ final class PhoneController: NSObject, ObservableObject {
         guard config.pocket != .none else { return nil }
         // Only the full swing turns the hips enough for a pocket phone to read.
         guard discipline.reportsSequencing else { return nil }
-        guard pelvis.count > Int(SwingAnalyzer.fs) else { return nil }
+        // Snapshot through the capture queue that owns the buffer.
+        var buf: [MotionFrame] = []
+        let op = BlockOperation { [self] in buf = pelvis }
+        queue.addOperations([op], waitUntilFinished: true)
+        guard buf.count > Int(SwingAnalyzer.fs) else { return nil }
         guard let impact = SwingAnalyzer.impactIndex(
-                pelvis, threshold: discipline.pelvisImpactThreshold) else { return nil }
+                buf, threshold: discipline.pelvisImpactThreshold) else { return nil }
         let lo = max(0, impact - Int(1.2 * SwingAnalyzer.fs))
-        let window = Array(pelvis[lo..<impact])
+        let window = Array(buf[lo..<impact])
+        // The placement setting says where the phone is SUPPOSED to be. On a
+        // hot day it comes out of the pocket and gets parked by the ball or
+        // under the bag, still playing music — and ground shock from a strike
+        // a foot away can fake a hip transient. So the window itself is asked
+        // whether it came off a body, per swing: parked, sequencing silently
+        // sits out; back in the pocket, it resumes. No setting to remember.
+        guard SwingAnalyzer.isOnBody(window) else { return nil }
         guard let peak = window.enumerated().max(by: {
             $0.element.rotationMagnitude < $1.element.rotationMagnitude
         }) else { return nil }

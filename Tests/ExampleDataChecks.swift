@@ -245,5 +245,35 @@ do {
           scores.allSatisfy { $0 >= 35 && $0 <= 95 })
 }
 
+
+// MARK: - Placement sensing
+
+// A phone parked by the ball must not pass for a phone in a pocket, even when
+// the strike's ground shock puts one violent transient into the window.
+do {
+    func frame(_ t: Double, rot: Double, accel: Double = 0.01) -> MotionFrame {
+        MotionFrame(t: t, accel: SIMD3(accel, 0, 0),
+                    rotation: SIMD3(rot, 0, 0), gravity: SIMD3(0, -1, 0))
+    }
+    // On body: sustained hip rotation through the downswing.
+    let pocket = (0..<120).map { frame(Double($0) / 100, rot: 0.6 + 0.4 * sin(Double($0) / 8)) }
+    check("placement: a pocketed phone reads as on-body",
+          SwingAnalyzer.isOnBody(pocket))
+
+    // Parked: near-stillness with one ground-shock spike near the end.
+    let parked = (0..<120).map { i in
+        frame(Double(i) / 100, rot: i == 110 ? 9.0 : 0.02, accel: i == 110 ? 3.0 : 0.005)
+    }
+    check("placement: a phone parked by the ball reads as off-body",
+          !SwingAnalyzer.isOnBody(parked))
+    check("placement: the ground-shock spike alone cannot flip the verdict",
+          !SwingAnalyzer.isOnBody(parked.map {
+              MotionFrame(t: $0.t, accel: $0.accel, rotation: $0.rotation * 2, gravity: $0.gravity) }))
+
+    // Too little data refuses to vouch for anything.
+    check("placement: a near-empty window never claims on-body",
+          !SwingAnalyzer.isOnBody(Array(pocket.prefix(5))))
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

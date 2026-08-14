@@ -297,3 +297,22 @@ same 0.18 readiness threshold the detector uses — so the screen shows the
 exact number the unlock decision runs on, not an unlabelled pair of bars.
 Counters move to the broadcast stat type. Last data-presentation surface
 brought into the redesign.
+
+## 29. Placement is sensed per swing, not trusted from settings
+
+The pocket setting says where the phone is supposed to be; on a hot day it
+comes out and gets parked by the ball or under the bag, still playing music.
+Ground shock from a strike a foot away can then fake a hip transient and turn
+into a garbage sequencing number. Every sequencing window is now asked whether
+it actually came off a body — median rotation over the pre-impact window,
+median precisely so one violent spike cannot vote — and a parked phone
+silently sits sequencing out for that swing while everything else (audio,
+detection, logging) is untouched. Back in the pocket, it resumes. No new
+setting, nothing to remember. Under test with synthetic pocketed and parked
+windows including the ground-shock case.
+
+Same pass: the pelvis buffer stopped hopping to the main actor a hundred
+times a second (it's owned by its capture queue now, snapshotted on read),
+and the strike-window mic prefers a plugged-in external input — USB, wired
+headset, line-in — over the grille mic lying face-up in grass. Bluetooth
+mics stay excluded; that lesson is DECISIONS 24.
