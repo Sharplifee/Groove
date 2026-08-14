@@ -248,7 +248,6 @@ struct WatchPreview: View {
         .padding(.horizontal, 4)
     }
 
-    private var gold: Color { Color(red: 0.988, green: 0.890, blue: 0.000) }
 
     private func stat(_ k: String, _ v: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -259,25 +258,3 @@ struct WatchPreview: View {
     }
 }
 
-/// The live consistency strip: one bar per recent swing, height keyed to how
-/// far that tempo sat from the session mean. A grooved run reads as a level
-/// row; the mishit reads as the bar that broke formation. Green when within
-/// ten percent of the mean, orange outside it — no numbers to parse mid-round.
-struct TempoStrip: View {
-    let tempos: [Double]
-
-    var body: some View {
-        let mean = tempos.reduce(0, +) / Double(tempos.count)
-        HStack(alignment: .center, spacing: 3) {
-            ForEach(Array(tempos.enumerated()), id: \.offset) { _, t in
-                let dev = mean > 0 ? (t - mean) / mean : 0
-                let clamped = max(-0.3, min(0.3, dev))
-                Capsule()
-                    .fill(abs(dev) <= 0.10 ? Color.green : Color.orange)
-                    .frame(width: 7, height: 8 + CGFloat(abs(clamped)) * 36)
-            }
-            Spacer(minLength: 0)
-        }
-        .accessibilityLabel("Your recent tempos against this session's average")
-    }
-}
