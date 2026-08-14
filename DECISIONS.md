@@ -265,3 +265,15 @@ as a neighbourhood band, not a bullseye. Components are piecewise-linear over
 explicit anchors pinned to the existing verdict boundaries (3.5/5/8 normalised),
 so the score and the words on screen can never disagree, and the anchors are
 under test in Tests/ExampleDataChecks.swift.
+
+## 26. The watch becomes the in-round HUD
+
+Broadcast treatment for the live surface: swing count and last tempo run big
+in heavy monospaced gold, and a consistency strip draws one bar per recent
+swing, height keyed to distance from the session mean — a grooved run reads as
+a level row, a mishit as the bar that broke formation, green inside ten
+percent and orange outside. Deliberately zero numbers to parse mid-round
+beyond the tempo itself; the strip is shape, not arithmetic. The controller
+now keeps the session's struck tempos (capped at 200) to feed it, resetting
+on session start. WatchPreview mirrors the new layout so every state stays
+inspectable without a paired device.

@@ -15,6 +15,9 @@ final class WatchController: NSObject, ObservableObject {
     @Published var struckCount = 0
     @Published var rehearsalCount = 0
     @Published var lastTempo: Double = 0
+    /// Struck tempos this session, oldest first — feeds the live consistency
+    /// strip on the face. Capped so an all-day range session can't grow it.
+    @Published var tempos: [Double] = []
     @Published var armConfidence: Double = 0
     @Published var plateauCount = 0
     @Published var isRunning = false
@@ -132,6 +135,7 @@ final class WatchController: NSObject, ObservableObject {
             struckCount = 0
             rehearsalCount = 0
             lastTempo = 0
+            tempos = []
             plateauCount = 0
 
             motion.deviceMotionUpdateInterval = 1.0 / SwingAnalyzer.fs
@@ -248,6 +252,10 @@ extension WatchController: RoutineDetectorDelegate {
         if swing.struck {
             struckCount += 1
             lastTempo = swing.metrics.tempoRatio
+            if swing.metrics.tempoRatio > 0 {
+                tempos.append(swing.metrics.tempoRatio)
+                if tempos.count > 200 { tempos.removeFirst() }
+            }
             if wasArmed { send(["event": "impact"]) }
             // Confirms the swing logged, so he never has to look at the watch.
             Haptic.captured()

@@ -67,13 +67,33 @@ struct WatchRootView: View {
 
             Spacer(minLength: 4)
 
-            // Swings and tempo are what you are here for. Practice-swing count is
-            // a diagnostic, so it sits small and last.
-            HStack {
+            // The in-round HUD. One glance between shots answers the two
+            // questions that matter mid-session: what did that one do, and am
+            // I repeating. Count and last tempo run big; the strip shows the
+            // last handful of tempos against the session mean, so a wild one
+            // sticks out as a tall or short bar without any reading.
+            HStack(alignment: .lastTextBaseline) {
                 stat(c.discipline.countWord, "\(c.struckCount)")
                 Spacer()
-                stat("tempo", c.lastTempo > 0 ? String(format: "%.1f", c.lastTempo) : "—")
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("TEMPO").font(.system(size: 9)).foregroundStyle(.secondary)
+                    HStack(alignment: .lastTextBaseline, spacing: 3) {
+                        Text(c.lastTempo > 0 ? String(format: "%.1f", c.lastTempo) : "—")
+                            .font(.system(size: 22, weight: .heavy, design: .monospaced))
+                            .foregroundStyle(gold)
+                            .contentTransition(.numericText())
+                        if c.lastTempo > 0 {
+                            Text(":1").font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
+
+            if c.tempos.count >= 2 {
+                TempoStrip(tempos: Array(c.tempos.suffix(7)))
+                    .frame(height: 20)
+            }
+
             Text("\(c.rehearsalCount) practice \(c.discipline.strokeWord)s")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
@@ -103,11 +123,37 @@ struct WatchRootView: View {
         .task { await c.requestAuthorization() }
     }
 
+    private var gold: Color { Color(red: 0.988, green: 0.890, blue: 0.000) }
+
     private func stat(_ k: String, _ v: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(k).font(.system(size: 9)).foregroundStyle(.secondary)
-            Text(v).font(.system(size: 17, weight: .bold, design: .rounded))
+            Text(v).font(.system(size: 22, weight: .heavy, design: .monospaced))
+                .contentTransition(.numericText())
         }
+    }
+}
+
+/// The live consistency strip: one bar per recent swing, height keyed to how
+/// far that tempo sat from the session mean. A grooved run reads as a level
+/// row; the mishit reads as the bar that broke formation. Green when within
+/// ten percent of the mean, orange outside it — no numbers to parse mid-round.
+struct TempoStrip: View {
+    let tempos: [Double]
+
+    var body: some View {
+        let mean = tempos.reduce(0, +) / Double(tempos.count)
+        HStack(alignment: .center, spacing: 3) {
+            ForEach(Array(tempos.enumerated()), id: \.offset) { _, t in
+                let dev = mean > 0 ? (t - mean) / mean : 0
+                let clamped = max(-0.3, min(0.3, dev))
+                Capsule()
+                    .fill(abs(dev) <= 0.10 ? Color.green : Color.orange)
+                    .frame(width: 7, height: 8 + CGFloat(abs(clamped)) * 36)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityLabel("Your recent tempos against this session's average")
     }
 }
 
@@ -178,11 +224,21 @@ struct WatchPreview: View {
                     .font(.system(size: 9)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
-            HStack {
+            HStack(alignment: .lastTextBaseline) {
                 stat("swings", "24")
                 Spacer()
-                stat("tempo", "3.0")
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("TEMPO").font(.system(size: 9)).foregroundStyle(.secondary)
+                    HStack(alignment: .lastTextBaseline, spacing: 3) {
+                        Text("3.0")
+                            .font(.system(size: 22, weight: .heavy, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.988, green: 0.890, blue: 0.000))
+                        Text(":1").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
             }
+            TempoStrip(tempos: [3.02, 2.96, 3.05, 2.71, 3.01, 2.98, 3.03])
+                .frame(height: 20)
             Text("41 practice swings").font(.system(size: 9)).foregroundStyle(.secondary)
             Button { } label: {
                 Text(running ? "End" : "Start").frame(maxWidth: .infinity)
@@ -192,10 +248,36 @@ struct WatchPreview: View {
         .padding(.horizontal, 4)
     }
 
+    private var gold: Color { Color(red: 0.988, green: 0.890, blue: 0.000) }
+
     private func stat(_ k: String, _ v: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(k).font(.system(size: 9)).foregroundStyle(.secondary)
-            Text(v).font(.system(size: 17, weight: .bold, design: .rounded))
+            Text(v).font(.system(size: 22, weight: .heavy, design: .monospaced))
+                .contentTransition(.numericText())
         }
+    }
+}
+
+/// The live consistency strip: one bar per recent swing, height keyed to how
+/// far that tempo sat from the session mean. A grooved run reads as a level
+/// row; the mishit reads as the bar that broke formation. Green when within
+/// ten percent of the mean, orange outside it — no numbers to parse mid-round.
+struct TempoStrip: View {
+    let tempos: [Double]
+
+    var body: some View {
+        let mean = tempos.reduce(0, +) / Double(tempos.count)
+        HStack(alignment: .center, spacing: 3) {
+            ForEach(Array(tempos.enumerated()), id: \.offset) { _, t in
+                let dev = mean > 0 ? (t - mean) / mean : 0
+                let clamped = max(-0.3, min(0.3, dev))
+                Capsule()
+                    .fill(abs(dev) <= 0.10 ? Color.green : Color.orange)
+                    .frame(width: 7, height: 8 + CGFloat(abs(clamped)) * 36)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityLabel("Your recent tempos against this session's average")
     }
 }

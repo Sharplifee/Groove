@@ -159,9 +159,13 @@ struct TodayView: View {
         VStack(spacing: Space.s) {
             HStack(spacing: Space.s) {
                 Circle().fill(Color.amber).frame(width: 9, height: 9)
+                    .shadow(color: Color.amber.opacity(0.6), radius: 4)
                 Text("Session running").font(.grooveHeadline)
             }
-            Text("\(c.summary.struckSwings.count) \(c.summary.discipline.countWord) so far")
+            Text("\(c.summary.struckSwings.count)")
+                .font(.grooveScore).foregroundStyle(.bone)
+                .contentTransition(.numericText())
+            Text(c.summary.discipline.countWord + " so far")
                 .font(.grooveCallout).foregroundStyle(.muted)
         }
         .frame(maxWidth: .infinity).padding(.vertical, Space.xl)
