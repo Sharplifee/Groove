@@ -183,5 +183,67 @@ check("oneSession preview is a single session",
       RangeSession.group(DemoData.oneSession).count == 1)
 
 print("")
+
+
+// MARK: - Groove Score
+
+// The anchors are the contract; these pin them where the verdict copy lives.
+check("score: perfect repeatability maps to 100",
+      GrooveScore.repeatability(0) == 100)
+check("score: the 'where you want to be' line (5%) maps to 75",
+      abs(GrooveScore.repeatability(5) - 75) < 0.001)
+check("score: the 'a bit loose' boundary (8%) maps to 50",
+      abs(GrooveScore.repeatability(8) - 50) < 0.001)
+check("score: beyond the last anchor clamps to zero",
+      GrooveScore.repeatability(40) == 0)
+check("score: hips and hands together is already under half",
+      GrooveScore.sequencing(0) < 50)
+check("score: a 30ms hip lead scores high",
+      GrooveScore.sequencing(30) > 85)
+
+// Discipline fairness: the same normalised spread must earn the same
+// repeatability score whether it came from the range or the green.
+do {
+    func session(_ d: Discipline, cv: Double) -> SessionSummary {
+        // Three tempos around the discipline reference with the requested CV.
+        let m = d.tempoReference
+        let sd = cv / 100 * m
+        let tempos = [m - sd, m, m + sd]
+        let swings = tempos.map { t -> Swing in
+            var mm = SwingMetrics(); mm.discipline = d; mm.tempoRatio = t; mm.smoothness = 80
+            return Swing(struck: true, routine: RoutineSignature(plateauCount: 3, meanDwell: 0.8, totalSetupDuration: 4, transitionSharpness: 0.5, dwellVariance: 0.1),
+                         armConfidence: 1, metrics: mm, normalizedTrace: [0, 1, 0])
+        }
+        return SessionSummary(swings: swings)
+    }
+    let full = session(.fullSwing, cv: 4.0)   // normalised 4.0 on scale 1.0
+    let putt = session(.putting,  cv: 2.0)    // normalised 4.0 on scale 0.5
+    let a = full.repeatabilityScore ?? -1
+    let b = putt.repeatabilityScore ?? -2
+    check("score: equal normalised spread scores equally across disciplines",
+          abs(a - b) < 0.75)
+    check("score: a full-swing session at 4% CV lands in Grooved territory",
+          (full.grooveScore ?? 0) >= 70)
+}
+
+// Under three struck strokes there is no score, and the app never invents one.
+do {
+    var m = SwingMetrics(); m.tempoRatio = 3.0; m.smoothness = 80
+    let two = SessionSummary(swings: (0..<2).map { _ in
+        Swing(struck: true, routine: RoutineSignature(plateauCount: 3, meanDwell: 0.8, totalSetupDuration: 4, transitionSharpness: 0.5, dwellVariance: 0.1),
+              armConfidence: 1, metrics: m, normalizedTrace: [0, 1, 0]) })
+    check("score: two strokes is not enough for a score", two.grooveScore == nil)
+}
+
+// The example data must show believable scores — the first-launch screen is a
+// sales floor, and a demo session scoring 12 or 100 would read as broken.
+do {
+    let sessions = RangeSession.group(DemoData.history())
+    let scores = sessions.compactMap { $0.summary.grooveScore }
+    check("score: every demo session earns a score", scores.count == sessions.count)
+    check("score: demo scores live in a believable band",
+          scores.allSatisfy { $0 >= 35 && $0 <= 95 })
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -209,7 +209,7 @@ enum Discipline: String, Codable, CaseIterable, Identifiable, Sendable {
     /// What a good number looks like here. Simpler motions repeat more tightly
     /// for the same player, so judging everything against the full-swing bands
     /// would flatter the short game into meaninglessness.
-    private var repeatabilityScale: Double {
+    var repeatabilityScale: Double {
         switch self {
         case .fullSwing: return 1.0
         case .chipping:  return 0.75

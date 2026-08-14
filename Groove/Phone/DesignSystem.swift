@@ -28,6 +28,11 @@ enum Face {
 extension Font {
     /// Hero number — the one figure a screen is built around.
     static var grooveHero:     Font { Face.display(52) }
+    /// The Groove Score in the hero ring. Monospaced digits so 88 and 71 sit
+    /// identically and the sweep animation doesn't shimmy.
+    static var grooveScore:    Font { Face.mono(54, .heavy) }
+    /// Hero-row stat values — big enough to read at arm's length.
+    static var grooveStat:     Font { Face.mono(26, .heavy) }
     /// Screen and card headline.
     static var grooveTitle:    Font { Face.display(26) }
     static var grooveHeadline: Font { Face.display(18) }

@@ -92,8 +92,15 @@ struct TodayView: View {
                 }
             } else {
                 startHeader
+                // The hero: last session as one score, three numbers, deltas
+                // against the previous comparable session. This is the screen
+                // a player checks walking off the range, so it answers "how
+                // was that?" before it explains anything.
                 if let last = c.sessions.first {
-                    SessionCard(session: last, isLatest: true)
+                    HeroCard(session: last,
+                             previous: c.sessions.dropFirst().first {
+                                 $0.summary.discipline == last.summary.discipline
+                             })
                 }
                 // Only sessions of the same discipline as the last one. A
                 // putting session repeats far tighter than a full-swing session
@@ -163,56 +170,89 @@ struct TodayView: View {
     }
 }
 
-/// Repeatability across recent sessions. Lower is better, so the axis is
-/// inverted deliberately — a rising line always means improving.
+/// Groove Score across recent sessions of the same discipline. The score is
+/// already higher-is-better, so no axis inversion games — the line rises as
+/// the player improves, full stop.
 struct TrendCard: View {
     let sessions: [RangeSession]
     var discipline: Discipline = .fullSwing
 
     private var values: [Double] {
-        sessions.map { $0.summary.repeatability }.filter { $0 > 0 }
+        sessions.compactMap { $0.summary.grooveScore }.map(Double.init)
     }
 
     var body: some View {
         if values.count > 1 {
-            ChartFrame(title: "are you getting more consistent",
-                       caption: "Each point is one \(discipline.label.lowercased()) session. Higher is better — the line rises as you become more repeatable.",
+            ChartFrame(title: "your groove, session over session",
+                       caption: "Each point is one \(discipline.label.lowercased()) session's Groove Score. The newest is the gold dot.",
                        height: 120) {
-                TrendLine(values: values)
+                TrendArea(points: values)
             }
         }
     }
 }
 
-private struct TrendLine: View {
-    let values: [Double]
+/// The broadcast hero: score ring on top, the three numbers that made it
+/// underneath, each with its change against the previous comparable session.
+struct HeroCard: View {
+    let session: RangeSession
+    var previous: RangeSession?
+
+    private var now: SessionSummary { session.summary }
+    private var then: SessionSummary? { previous?.summary }
 
     var body: some View {
-        GeometryReader { g in
-            let lo = (values.min() ?? 0) - 0.5
-            let hi = (values.max() ?? 1) + 0.5
-            let span = max(0.1, hi - lo)
-            let x = { (i: Int) in g.size.width * Double(i) / Double(max(1, values.count - 1)) }
-            // Inverted: low repeatability is good, so it plots high.
-            let y = { (v: Double) in g.size.height * ((v - lo) / span) }
+        Card(now.discipline.label.lowercased() + " · " +
+             session.date.formatted(date: .abbreviated, time: .omitted)) {
+            if let score = now.grooveScore, let verdict = now.scoreVerdict {
+                ScoreRing(score: score, verdict: verdict)
+            } else {
+                Note("A few more \(now.discipline.countWord) and this session gets a score.")
+            }
 
-            ZStack {
-                Path { p in
-                    for (i, v) in values.enumerated() {
-                        i == 0 ? p.move(to: .init(x: x(i), y: y(v)))
-                               : p.addLine(to: .init(x: x(i), y: y(v)))
-                    }
-                }
-                .stroke(Color.accent, style: .init(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
-
-                ForEach(Array(values.enumerated()), id: \.offset) { i, v in
-                    Circle().fill(Color.accent)
-                        .frame(width: 5, height: 5)
-                        .position(x: x(i), y: y(v))
+            HStack(alignment: .top, spacing: Space.m) {
+                BroadcastTile(label: "repeat",
+                              value: now.hasScore ? String(format: "%.1f", now.repeatability) : "—",
+                              unit: "%",
+                              delta: repeatDelta)
+                BroadcastTile(label: "tempo",
+                              value: now.meanTempo > 0 ? String(format: "%.2f", now.meanTempo) : "—",
+                              unit: ":1",
+                              delta: nil)
+                if let lead = now.meanPelvisLead {
+                    BroadcastTile(label: "hips lead",
+                                  value: String(format: "%+.0f", lead),
+                                  unit: "ms",
+                                  delta: leadDelta)
+                } else {
+                    BroadcastTile(label: "smooth",
+                                  value: now.smoothnessScore.map { String(format: "%.0f", $0) } ?? "—",
+                                  delta: smoothDelta)
                 }
             }
+            .padding(.top, Space.s)
         }
-        .accessibilityLabel("Repeatability across your recent sessions")
+    }
+
+    // Deltas carry their own better-direction: repeatability improves DOWN,
+    // everything else improves UP. That inversion lives here, once.
+    private var repeatDelta: (String, Bool)? {
+        guard let t = then, t.hasScore, now.hasScore else { return nil }
+        let d = now.repeatability - t.repeatability
+        guard abs(d) >= 0.1 else { return nil }
+        return (String(format: "%.1f", abs(d)), d < 0)
+    }
+    private var leadDelta: (String, Bool)? {
+        guard let a = now.meanPelvisLead, let b = then?.meanPelvisLead else { return nil }
+        let d = a - b
+        guard abs(d) >= 1 else { return nil }
+        return (String(format: "%.0f ms", abs(d)), d > 0)
+    }
+    private var smoothDelta: (String, Bool)? {
+        guard let a = now.smoothnessScore, let b = then?.smoothnessScore else { return nil }
+        let d = a - b
+        guard abs(d) >= 1 else { return nil }
+        return (String(format: "%.0f", abs(d)), d > 0)
     }
 }
 
@@ -297,6 +337,8 @@ struct FormView: View {
                 Text(String(format: "%.1f", view.repeatability))
                     .font(.grooveHero).foregroundStyle(.bone)
                 Text("%").font(.grooveHeadline).foregroundStyle(.muted)
+                Spacer()
+                if let g = view.grooveScore { ScoreBadge(score: g) }
             }
             Text(view.repeatabilityVerdict)
                 .font(.grooveBody).foregroundStyle(.bone)
@@ -310,12 +352,9 @@ struct FormView: View {
 
     private var tempoCard: some View {
         Card("tempo") {
-            HStack(spacing: Space.l) {
-                StatTile("yours", String(format: "%.2f", view.meanTempo), unit: ": 1")
-                StatTile(lens.tempoReferenceLabel,
-                         String(format: "%.2f", lens.tempoReference),
-                         unit: ": 1", tint: .accent)
-            }
+            TempoMeter(value: view.meanTempo,
+                       reference: lens.tempoReference,
+                       referenceLabel: lens.tempoReferenceLabel)
             Note(lens == .putting
                  ? "How long your backstroke takes compared with your forward stroke. Around two to one is typical — a putt accelerates through the ball rather than releasing into it."
                  : "How long your backswing takes compared with your downswing. There's no right number — yours being the same every time matters more than matching anyone else's.")
@@ -324,9 +363,7 @@ struct FormView: View {
 
     private func sequencingCard(_ lead: Double) -> some View {
         Card("hips and hands") {
-            StatTile("your hips lead by",
-                     String(format: "%.0f", lead), unit: "ms",
-                     tint: lead > 0 ? .turf : .alert)
+            SequenceBar(leadMs: lead)
             Note(lead > 0
                  ? "Your hips start turning before your hands come down, which is the order you want."
                  : "Your hands are arriving before your hips turn. That's the reverse of what most good swings do.")
@@ -345,6 +382,13 @@ struct SessionCard: View {
         Card(isLatest ? "last session"
                       : session.date.formatted(date: .abbreviated, time: .omitted)) {
             HStack(spacing: Space.l) {
+                if let g = session.summary.grooveScore {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("SCORE").font(.grooveEyebrow)
+                            .foregroundStyle(.muted).kerning(1.1)
+                        ScoreBadge(score: g)
+                    }
+                }
                 StatTile(session.summary.discipline.countWord, "\(session.struckCount)")
                 StatTile("repeatability",
                          session.struckCount > 1
@@ -431,12 +475,17 @@ struct EnsembleChart: View {
                         p.closeSubpath()
                     }.fill(Color.trace.opacity(0.18))
 
-                    Path { p in
+                    // The median wears a glow — the broadcast tracer read.
+                    // It's the same line twice, once soft and once sharp;
+                    // no blur filters, so it stays cheap to draw.
+                    let median = Path { p in
                         for (i, v) in e.median.enumerated() {
                             i == 0 ? p.move(to: .init(x: x(i), y: y(v)))
                                    : p.addLine(to: .init(x: x(i), y: y(v)))
                         }
-                    }.stroke(Color.trace, lineWidth: 2.2)
+                    }
+                    median.stroke(Color.trace.opacity(0.35), lineWidth: 6)
+                    median.stroke(Color.trace, lineWidth: 2.2)
 
                     let ix = geo.size.width * SwingAnalyzer.tracePre
                         / (SwingAnalyzer.tracePre + SwingAnalyzer.tracePost)
@@ -445,6 +494,15 @@ struct EnsembleChart: View {
                         p.addLine(to: .init(x: ix, y: geo.size.height))
                     }.stroke(Color.accent.opacity(0.8),
                              style: .init(lineWidth: 1, dash: [3, 4]))
+
+                    // Impact flash: an amber dot where the median crosses the
+                    // strike, the one moment every trace is aligned on.
+                    let iIdx = min(n - 1, Int(Double(n - 1) * SwingAnalyzer.tracePre
+                        / (SwingAnalyzer.tracePre + SwingAnalyzer.tracePost)))
+                    Circle().fill(Color.amber)
+                        .frame(width: 9, height: 9)
+                        .shadow(color: Color.amber.opacity(0.7), radius: 5)
+                        .position(x: ix, y: y(e.median[iIdx]))
 
                     Text("impact")
                         .font(.grooveEyebrow).foregroundStyle(.accent)

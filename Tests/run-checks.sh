@@ -20,6 +20,7 @@ cp Tests/ExampleDataChecks.swift "$OUT/main.swift"
     Groove/Shared/Models.swift \
     Groove/Shared/Discipline.swift \
     Groove/Shared/SwingAnalyzer.swift \
+    Groove/Shared/Score.swift \
     Groove/Phone/DemoData.swift \
     "$OUT/main.swift"
 "$OUT/checks"

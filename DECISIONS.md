@@ -245,3 +245,23 @@ Events are now stamped on the watch, and anything older than a minute is
 discarded. Unstamped events — a watch on an older build than the phone, which
 happens routinely — are still handled, but are never allowed to start a session
 on their own.
+
+## 25. The broadcast presentation layer and the Groove Score
+
+The data screens are rebuilt in a television-graphics language — score ring,
+needle meters, delta arrows, glowing tracer — aimed at players good enough to
+want the numbers and busy enough to want them instantly. Three rules keep it a
+training tool rather than an arcade: every pixel maps to a measurement, the
+number leads and the sentence follows, and amber stays a shape, never text.
+
+The Groove Score is one 0–100 number per session, weighted the way the app's
+own coaching copy already talks: 55% repeatability (discipline-normalised tempo
+variation), 25% smoothness, 20% sequencing — with sequencing's weight folding
+back proportionally where hips don't move or no phone was carried, so a putting
+session isn't docked for physics it doesn't have. It deliberately does NOT
+grade tempo against the tour number, because the app's stated doctrine is that
+owning a tempo beats matching anyone's; the tour reference appears on the meter
+as a neighbourhood band, not a bullseye. Components are piecewise-linear over
+explicit anchors pinned to the existing verdict boundaries (3.5/5/8 normalised),
+so the score and the words on screen can never disagree, and the anchors are
+under test in Tests/ExampleDataChecks.swift.
