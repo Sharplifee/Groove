@@ -277,3 +277,14 @@ beyond the tempo itself; the strip is shape, not arithmetic. The controller
 now keeps the session's struck tempos (capped at 200) to feed it, resetting
 on session start. WatchPreview mirrors the new layout so every state stays
 inspectable without a paired device.
+
+## 27. CI clears orphaned signing certificates before each archive
+
+Run 22 jammed on Apple's per-team certificate cap. Cause: every TestFlight run
+lands on a fresh ephemeral runner, -allowProvisioningUpdates mints a new
+signing certificate there, and the private key dies with the runner — so the
+team accumulates unusable orphans until Apple refuses to issue more. The
+workflow now deletes all DEVELOPMENT/DISTRIBUTION certificates via the ASC API
+before archiving and mints exactly what it needs; orphans are unusable by
+definition, and any local Xcode simply re-creates its own on next build. Fixed
+in the workflow rather than by one-off cleanup so the cap can never re-bite.
