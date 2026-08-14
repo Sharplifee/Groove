@@ -288,3 +288,12 @@ workflow now deletes all DEVELOPMENT/DISTRIBUTION certificates via the ASC API
 before archiving and mints exactly what it needs; orphans are unusable by
 definition, and any local Xcode simply re-creates its own on next build. Fixed
 in the workflow rather than by one-off cleanup so the cap can never re-bite.
+
+## 28. Calibration presents its gap as the number it actually is
+
+The separation view now prints the measured gap between real-swing and
+practice-swing confidence directly between its two markers, coloured by the
+same 0.18 readiness threshold the detector uses — so the screen shows the
+exact number the unlock decision runs on, not an unlabelled pair of bars.
+Counters move to the broadcast stat type. Last data-presentation surface
+brought into the redesign.

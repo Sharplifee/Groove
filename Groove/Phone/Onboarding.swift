@@ -207,9 +207,11 @@ struct CalibrationProgress: View {
     private func counter(_ label: String, _ n: Int) -> some View {
         VStack(spacing: Space.xs) {
             Text("\(min(n, target)) / \(target)")
-                .font(.grooveFigure)
+                .font(.grooveStat)
                 .foregroundStyle(n >= target ? Color.turf : Color.bone)
-            Text(label).font(.grooveCaption).foregroundStyle(.muted)
+                .contentTransition(.numericText())
+            Text(label.uppercased())
+                .font(.grooveEyebrow).foregroundStyle(.muted).kerning(1.1)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
@@ -217,35 +219,57 @@ struct CalibrationProgress: View {
 }
 
 /// Shows the actual gap it found between your real swings and your practice
-/// ones, rather than asking you to take its word for it.
+/// ones, rather than asking you to take its word for it. The gap IS the
+/// readiness test — separation above 0.18 is what unlocks the detector — so
+/// it gets printed as the number, seated between the two markers it measures.
 struct SeparationBar: View {
     let real: Double, rehearsal: Double
+    private let ready = 0.18
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.xs + 1) {
+        let gap = real - rehearsal
+        VStack(alignment: .leading, spacing: Space.s) {
             GeometryReader { g in
+                let w = g.size.width
+                let xr = w * min(1, max(0, rehearsal))
+                let xs = w * min(1, max(0, real))
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.muted.opacity(0.18))
-                    Capsule().fill(Color.accent)
-                        .frame(width: g.size.width * rehearsal, height: 6)
-                        .offset(y: 5)
-                    Capsule().fill(Color.turf)
-                        .frame(width: g.size.width * real, height: 6)
-                        .offset(y: -5)
+                    Capsule().fill(Color.bone.opacity(0.10))
+                        .frame(height: 6).offset(y: 12)
+                    // The gap itself, painted between the two markers.
+                    if xs > xr {
+                        Capsule()
+                            .fill(LinearGradient(colors: [Color.accent.opacity(0.35),
+                                                          Color.turf.opacity(0.55)],
+                                                 startPoint: .leading, endPoint: .trailing))
+                            .frame(width: xs - xr, height: 6)
+                            .offset(x: xr, y: 12)
+                    }
+                    Circle().fill(Color.accent)
+                        .frame(width: 11, height: 11)
+                        .position(x: xr, y: 15)
+                    Circle().fill(Color.turf)
+                        .frame(width: 13, height: 13)
+                        .shadow(color: Color.turf.opacity(0.6), radius: 4)
+                        .position(x: xs, y: 15)
+                    Text(String(format: "GAP %.2f", gap))
+                        .font(.grooveEyebrow.weight(.heavy)).kerning(1.1)
+                        .foregroundStyle(gap >= ready ? Color.turf : Color.alert)
+                        .position(x: min(max((xr + xs) / 2, 34), w - 34), y: 0)
                 }
             }
-            .frame(height: 24)
+            .frame(height: 26)
             HStack {
-                Label("your real swings", systemImage: "circle.fill")
-                    .foregroundStyle(.turf)
-                Spacer()
-                Label("your practice swings", systemImage: "circle.fill")
+                Label("practice", systemImage: "circle.fill")
                     .foregroundStyle(.accent)
+                Spacer()
+                Label("real swings", systemImage: "circle.fill")
+                    .foregroundStyle(.turf)
             }
             .font(.grooveEyebrow)
             .labelStyle(.titleAndIcon)
             .imageScale(.small)
         }
-        .accessibilityLabel("The gap between your real swings and your practice swings")
+        .accessibilityLabel(String(format: "The gap between your real swings and your practice swings is %.2f", gap))
     }
 }
