@@ -180,6 +180,75 @@ jobs:
           grep -E "error:" archive.log | sort -u | head -60 >> $GITHUB_STEP_SUMMARY || \
             echo "none" >> $GITHUB_STEP_SUMMARY
 
+      # Uploading is not releasing. A build can sit VALID in App Store Connect
+      # indefinitely and never appear in TestFlight because nothing attached it
+      # to a beta group — which is exactly what happened to builds 21 through
+      # 32: all uploaded, all valid, none visible, the tester stuck on build 20
+      # for days while "upload succeeded" was reported every time. Assignment
+      # is now part of shipping, and the step fails loudly if it doesn't stick.
+      - name: Release the build to testers
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          pip3 install --quiet --break-system-packages pyjwt cryptography
+          python3 - <<'RELEASE'
+          import json, os, time, urllib.request, urllib.error, jwt
+          kid, iss = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
+          key = open(os.path.expanduser(f"~/private_keys/AuthKey_{kid}.p8")).read()
+          tok = jwt.encode({"iss": iss, "iat": int(time.time()),
+                            "exp": int(time.time()) + 1800,
+                            "aud": "appstoreconnect-v1"},
+                           key, algorithm="ES256", headers={"kid": kid})
+          BASE = "https://api.appstoreconnect.apple.com"
+          def call(method, path, body=None):
+              data = json.dumps(body).encode() if body else None
+              r = urllib.request.Request(BASE + path, data=data, method=method,
+                                         headers={"Authorization": "Bearer " + tok,
+                                                  "Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(r) as resp:
+                      raw = resp.read()
+                      return json.loads(raw) if raw else None
+              except urllib.error.HTTPError as e:
+                  print(f"   !! {method} {path} -> {e.code}: {e.read().decode()[:300]}")
+                  return None
+
+          APP, VERSION = "6801063220", os.environ.get("GITHUB_RUN_NUMBER", "")
+          # Processing takes a few minutes after upload; wait for this build.
+          target = None
+          for attempt in range(30):
+              builds = call("GET", f"/v1/builds?filter[app]={APP}&sort=-version&limit=5")
+              for b in (builds or {}).get("data", []):
+                  if b["attributes"]["version"] == VERSION:
+                      target = b
+                      break
+              if target and target["attributes"]["processingState"] == "VALID":
+                  break
+              print(f"   waiting for build {VERSION} to finish processing "
+                    f"({target['attributes']['processingState'] if target else 'not visible yet'})")
+              target = None
+              time.sleep(30)
+          if not target:
+              raise SystemExit(f"build {VERSION} never became VALID — nothing released")
+
+          groups = call("GET", f"/v1/betaGroups?filter[app]={APP}")["data"]
+          for g in groups:
+              call("POST", f"/v1/betaGroups/{g['id']}/relationships/builds",
+                   {"data": [{"type": "builds", "id": target["id"]}]})
+              print(f"   attached to {g['attributes']['name']}")
+
+          # Verify from the group side — Apple forbids the build-side query.
+          landed = []
+          for g in groups:
+              gb = call("GET", f"/v1/betaGroups/{g['id']}/builds?limit=200")
+              if any(b["id"] == target["id"] for b in (gb or {}).get("data", [])):
+                  landed.append(g["attributes"]["name"])
+          print(f"== build {VERSION} released to: {landed or 'NOTHING'} ==")
+          if not landed:
+              raise SystemExit("build uploaded but not released to any group")
+          RELEASE
+
       - name: Clean up the key
         if: always()
         run: rm -rf ~/private_keys

@@ -385,3 +385,17 @@ processes a swing, and every flush re-queued the entire spool without checking
 the system outbox — so undeliverable acks met a snowballing queue and the
 counter froze. Acks now also travel the durable channel and the watch listens
 on both; flush skips anything already in flight.
+
+## 34. Uploading is not releasing — the pipeline now does both
+
+The root cause of "I'm still on an old build": every build from 21 through 32
+uploaded successfully, processed to VALID, and was never attached to a beta
+group, so none of them ever appeared in TestFlight. The tester sat on build 20
+for five days while each run truthfully reported UPLOAD SUCCEEDED. Two lessons
+baked in: the TestFlight workflow now waits for its own build to finish
+processing, attaches it to every beta group, verifies the attachment stuck,
+and fails the run if it didn't — a green pipeline now means the build is on
+the phone, not merely on Apple's servers. And assignment must be read from the
+group side (`/v1/betaGroups/{id}/builds`); Apple forbids GET_RELATED on
+`builds->betaGroups`, so the build-side query 403s and makes every build look
+unassigned whether it is or not.
