@@ -350,3 +350,25 @@ stroke or soft pitch never crossed it and went entirely unseen. It scales with
 the discipline's motion range now, floored above the stillness gate so idle
 wrist noise still can't start a swing. Both behaviours are pinned in the
 harness, including the exact warm-up-strike case the range visit exposed.
+
+## 32. The range faults, fixed at the logic level — and a capture mode to catch the rest
+
+Field sessions exposed three detector logic faults beyond thresholds, each now
+fixed and pinned by replaying synthetic reproductions through the real engine:
+the swing timeout kept running after an impact had been found, so slow warm-up
+swings were logged as rehearsals (a struck ball is a struck ball, however long
+the swing took to arrive); a waggle at address could sustain takeaway-level
+rotation, start a phantom swing, and leave the detector in recovery while the
+real swing went unseen (false starts now abort silently, logging nothing and
+teaching the template nothing); and recovery's only exit was stillness, so a
+fidgety wrist between balls could blind the detector indefinitely (time
+releases it now too).
+
+And because field misfires beat synthetic guesses: a diagnostic capture mode.
+Armed from the watch before a session, both devices record every raw sensor
+frame at full rate plus a narrated log of every decision the detector made —
+takeaways, aborts, impact floors, verdicts. The watch ships its half to the
+phone at session end; the phone merges both into one JSON bundle exportable
+from Setup. The detector is pure shared code, so a capture replays through the
+exact engine anywhere — the harness already proves a serialised session
+replays to the same verdicts. Misfires from the range become regression tests.

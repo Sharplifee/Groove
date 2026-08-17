@@ -86,6 +86,10 @@ protocol RoutineDetectorDelegate: AnyObject {
 final class RoutineDetector {
 
     weak var delegate: RoutineDetectorDelegate?
+    /// Diagnostic narration: fired at every decision the detector makes, with
+    /// the frame time it made it at. Only wired during a capture; nil costs
+    /// nothing on the hot path.
+    var onTrace: ((TimeInterval, String) -> Void)?
     private(set) var state: DetectorState = .watching
     private(set) var template = RoutineTemplate.load()
     var config = Config.load()
@@ -107,6 +111,11 @@ final class RoutineDetector {
     private var armedAt: TimeInterval?
     private var takeawayIdx: Int?
     private var swingPeakRotation: Double = 0
+    /// Impact found, tail still accruing. Its existence disables the timeout —
+    /// a swing with a detected strike must never be logged as a rehearsal just
+    /// because it was slow getting there.
+    private var pendingImpact: Int?
+    private var recoverStart: TimeInterval?
     private var armConfidence: Double = 0
     private var isArmed = false
     private var wasArmedForThisSwing = false
@@ -125,6 +134,7 @@ final class RoutineDetector {
         buffer.removeAll(keepingCapacity: true)
         state = .watching
         settleStart = nil; armedAt = nil; takeawayIdx = nil
+        pendingImpact = nil; recoverStart = nil; swingPeakRotation = 0
         isArmed = false; wasArmedForThisSwing = false
         armConfidence = 0
         samplesSinceSignature = 0
@@ -198,6 +208,7 @@ final class RoutineDetector {
         armedAt = f.t
         isArmed = true
         state = .armed
+        onTrace?(f.t, String(format: "armed (confidence %.2f)", confidence))
         delegate?.detectorDidArm(confidence: confidence)
     }
 
@@ -215,7 +226,9 @@ final class RoutineDetector {
     }
 
     private func beginSwing() {
+        onTrace?(buffer.last?.t ?? 0, "takeaway (armed=\(isArmed))")
         swingPeakRotation = 0
+        pendingImpact = nil
         takeawayIdx = max(0, buffer.count - 8)
         wasArmedForThisSwing = isArmed
         state = .swinging
@@ -237,22 +250,62 @@ final class RoutineDetector {
             peakRotation: swingPeakRotation,
             referenceRotation: discipline.referenceRotation)
 
-        if let impact = SwingAnalyzer.impactIndex(buffer, from: takeaway,
-                                                  threshold: floor),
-           buffer.count - impact > tail {
-            complete(takeaway: takeaway, impact: impact)
+        if pendingImpact == nil {
+            pendingImpact = SwingAnalyzer.impactIndex(buffer, from: takeaway,
+                                                      threshold: floor)
+            if let p = pendingImpact {
+                onTrace?(f.t, String(format: "impact found (floor %.0f, peak rot %.1f, idx %d)",
+                                     floor, swingPeakRotation, p))
+            }
+        }
+        if let impact = pendingImpact {
+            // Strike confirmed; the only thing left is collecting the trace
+            // tail. The timeout no longer applies — the old code kept it
+            // running, so a slow warm-up swing (or one whose takeaway fired
+            // early off a forward press) hit the 3-second limit AFTER its
+            // impact had been found and was logged as a rehearsal. A struck
+            // ball is a struck ball, however long the swing took to arrive.
+            if buffer.count - impact > tail { complete(takeaway: takeaway, impact: impact) }
             return
         }
+
+        // False start: a waggle or club lift at address sustains takeaway-level
+        // rotation for the trigger window, then dies. If rotation has collapsed
+        // shortly after the trigger with no strike, this was never a swing —
+        // abort silently back to watching. No rehearsal is logged and the
+        // template learns nothing, because there is nothing to learn from.
+        // The window closes at 0.7s so the near-zero rotation of a real
+        // transition pause at the top can never be mistaken for a dead waggle.
+        if elapsed > 0.35, elapsed < 0.7,
+           buffer.suffix(15).allSatisfy({ $0.rotationMagnitude
+                                          < discipline.takeawayThreshold * 0.6 }) {
+            onTrace?(f.t, "false start aborted — rotation died after the trigger")
+            state = .watching
+            takeawayIdx = nil
+            pendingImpact = nil
+            return
+        }
+
         // No strike inside the window — this was a rehearsal. Restore audio now
         // rather than waiting; a fast correction beats a cautious prediction.
-        if elapsed > swingTimeout { complete(takeaway: takeaway, impact: nil) }
+        if elapsed > swingTimeout {
+            onTrace?(f.t, "no strike inside the window — rehearsal")
+            complete(takeaway: takeaway, impact: nil)
+        }
     }
 
     private func evaluateRecovering(_ f: MotionFrame) {
-        guard isStill else { return }
+        if recoverStart == nil { recoverStart = f.t }
+        // Stillness releases recovery — but stillness alone was the only exit,
+        // and a fidgety wrist between range balls (raking the next one over,
+        // wind, waggling) could hold the detector in recovery indefinitely,
+        // blind to every swing that followed. Time releases it too.
+        guard isStill || f.t - (recoverStart ?? f.t) > 2.5 else { return }
+        onTrace?(f.t, isStill ? "recovered (still)" : "recovered (timed release)")
         state = .watching
         settleStart = nil
         takeawayIdx = nil
+        recoverStart = nil
     }
 
     // MARK: Completion + self-training
@@ -297,7 +350,11 @@ final class RoutineDetector {
         wasArmedForThisSwing = false
         state = .recovering
         takeawayIdx = nil
+        pendingImpact = nil
+        recoverStart = nil
 
+        onTrace?(buffer.last?.t ?? 0,
+                 swing.struck ? "swing complete — STRUCK" : "swing complete — rehearsal")
         delegate?.detectorDidCompleteSwing(swing, wasArmed: armed)
     }
 }

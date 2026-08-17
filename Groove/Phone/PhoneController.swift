@@ -165,10 +165,20 @@ final class PhoneController: NSObject, ObservableObject {
 
     /// Called only in response to the watch. There is no phone-side start —
     /// the phone is in a back pocket and can't be a control surface.
-    fileprivate func mirrorSessionStart() {
+    /// The phone half of a diagnostic capture. Owned by `queue`, same as the
+    /// pelvis buffer it records alongside.
+    private var capture: CaptureRecorder?
+    private var pendingWatchStream: CaptureStream?
+    private var pendingPhoneStream: CaptureStream?
+
+    fileprivate func mirrorSessionStart(capturing: Bool = false) {
         guard !isSessionLive else { return }
         t0 = Date()
         pelvis.removeAll(keepingCapacity: true)
+        if capturing {
+            let rec = CaptureRecorder(device: "phone", discipline: discipline)
+            queue.addOperation { [self] in capture = rec }
+        }
 
         // This must come first. Without a live audio session the app is
         // suspended within seconds of the screen locking, which stops
@@ -184,6 +194,13 @@ final class PhoneController: NSObject, ObservableObject {
     }
 
     fileprivate func mirrorSessionEnd() {
+        queue.addOperation { [self] in
+            if let rec = capture {
+                pendingPhoneStream = rec.stream
+                capture = nil
+                tryWriteCaptureBundle()
+            }
+        }
         motion.stopDeviceMotionUpdates()
         disarmWork?.cancel()
         audio.disarm()
@@ -211,6 +228,7 @@ final class PhoneController: NSObject, ObservableObject {
             // hundred main-thread tasks a second for an entire session, spent
             // on a buffer the UI never reads. The buffer is owned by this
             // queue now; readers snapshot through it.
+            self.capture?.append(f)
             self.pelvis.append(f)
             let cap = Int(SwingAnalyzer.fs * 15)
             if self.pelvis.count > cap { self.pelvis.removeFirst(self.pelvis.count - cap) }
@@ -220,6 +238,10 @@ final class PhoneController: NSObject, ObservableObject {
     // MARK: Watch events
 
     private func handle(event: String, confidence: Double) {
+        if capture != nil {
+            let t = Date().timeIntervalSince(t0)
+            queue.addOperation { [self] in capture?.mark(t, "phone received: \(event)") }
+        }
         switch event {
         case "arm":
             // Open the record session early so takeaway only has to raise a fader.
@@ -263,9 +285,6 @@ final class PhoneController: NSObject, ObservableObject {
             // Stops capture only — never deactivates the session, or the app
             // dies in the pocket.
             audio.disarm()
-
-        case "sessionStart":
-            mirrorSessionStart()
 
         case "sessionEnd":
             mirrorSessionEnd()
@@ -339,6 +358,39 @@ final class PhoneController: NSObject, ObservableObject {
             $0.element.rotationMagnitude < $1.element.rotationMagnitude
         }) else { return nil }
         return Double(window.count - peak.offset) / SwingAnalyzer.fs * 1000
+    }
+
+    /// Both halves land asynchronously — the phone stream at session end, the
+    /// watch stream whenever transferFile completes, which can be a minute
+    /// later. Whichever arrives second writes the bundle; a bundle with one
+    /// half is still written after the other, so a transfer failure loses the
+    /// watch's half, never the whole capture. Runs on `queue`.
+    private func tryWriteCaptureBundle() {
+        guard pendingWatchStream != nil || pendingPhoneStream != nil else { return }
+        let bundle = CaptureBundle(watch: pendingWatchStream, phone: pendingPhoneStream)
+        guard let data = try? JSONEncoder().encode(bundle) else { return }
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("captures", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("groove-capture-\(Int(Date().timeIntervalSince1970)).json")
+        try? data.write(to: url)
+        if pendingWatchStream != nil && pendingPhoneStream != nil {
+            pendingWatchStream = nil; pendingPhoneStream = nil
+        }
+    }
+
+    /// Newest capture bundle on disk, for the share sheet.
+    func captureExportURL() -> URL? {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("captures", isDirectory: true)
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        return files.filter { $0.pathExtension == "json" }
+            .max { a, b in
+                let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return da < db
+            }
     }
 
     /// Soft delete with a window to undo — one tap shouldn't cost a rep permanently.
@@ -420,6 +472,20 @@ extension PhoneController: WCSessionDelegate {
         route(userInfo)
     }
 
+    nonisolated func session(_ s: WCSession, didReceive file: WCSessionFile) {
+        // The system deletes the file when this returns — read it now.
+        guard (file.metadata?["kind"] as? String) == "capture",
+              let data = try? Data(contentsOf: file.fileURL),
+              let stream = try? JSONDecoder().decode(CaptureStream.self, from: data)
+        else { return }
+        Task { @MainActor in
+            self.queue.addOperation { [self] in
+                pendingWatchStream = stream
+                tryWriteCaptureBundle()
+            }
+        }
+    }
+
     private nonisolated func route(_ payload: [String: Any]) {
         if let data = payload["swing"] as? Data,
            let swing = try? JSONDecoder().decode(Swing.self, from: data) {
@@ -452,6 +518,7 @@ extension PhoneController: WCSessionDelegate {
         let isFresh = age.map { $0 <= 60 } ?? false
         if isStale { return }
 
+        let capturing = payload["capturing"] as? Bool ?? false
         Task { @MainActor in
             if let sentDiscipline { self.discipline = sentDiscipline }
             // Late-join safety net: if we somehow missed sessionStart, a live
@@ -461,7 +528,8 @@ extension PhoneController: WCSessionDelegate {
             if !self.isSessionLive, isFresh, event == "arm" || event == "takeaway" {
                 self.mirrorSessionStart()
             }
-            self.handle(event: event, confidence: confidence)
+            if event == "sessionStart" { self.mirrorSessionStart(capturing: capturing) }
+            else { self.handle(event: event, confidence: confidence) }
         }
     }
 }

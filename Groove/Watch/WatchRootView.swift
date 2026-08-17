@@ -38,6 +38,7 @@ struct WatchRootView: View {
                 Text("GROOVE").font(.system(size: 13, weight: .heavy, design: .rounded))
                 Spacer()
                 HStack(spacing: 4) {
+                    if c.isRunning && c.capturingLive { Text("REC").font(.system(size: 9, weight: .heavy)).foregroundStyle(.red) }
                     if c.isRunning { Circle().fill(accent).frame(width: 6, height: 6) }
                     Text(label)
                         .font(.system(size: 14, weight: .heavy, design: .rounded))
@@ -106,6 +107,21 @@ struct WatchRootView: View {
             // stack together, so switching mid-session is refused rather than
             // silently mixing a putt into a full-swing ensemble.
             if !c.isRunning {
+                // Diagnostic capture toggle. Armed here, it records the whole
+                // NEXT session — every raw frame, every detector decision —
+                // and ships the file to the phone for export when it ends.
+                Button { c.isCapturing.toggle() } label: {
+                    HStack(spacing: 4) {
+                        Circle().fill(c.isCapturing ? Color.red : Color.secondary)
+                            .frame(width: 6, height: 6)
+                        Text(c.isCapturing ? "CAPTURE ARMED — next session records everything"
+                                           : "capture next session")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(c.isCapturing ? Color.red : Color.secondary)
+
                 // Four chips in one row, replacing the navigationLink picker
                 // that rendered as a giant unlabeled pill jammed against the
                 // Start button — the worst offender in the overlap screenshot.

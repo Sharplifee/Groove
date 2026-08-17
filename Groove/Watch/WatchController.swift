@@ -18,6 +18,12 @@ final class WatchController: NSObject, ObservableObject {
     /// Struck tempos this session, oldest first — feeds the live consistency
     /// strip on the face. Capped so an all-day range session can't grow it.
     @Published var tempos: [Double] = []
+    /// Diagnostic capture: while true, every raw frame and every detector
+    /// decision is being written down for export and offline replay.
+    @Published var isCapturing = false
+    /// True while a running session is actually recording (isCapturing arms it).
+    @Published var capturingLive = false
+    private var capture: CaptureRecorder?
     @Published var armConfidence: Double = 0
     @Published var plateauCount = 0
     @Published var isRunning = false
@@ -157,6 +163,7 @@ final class WatchController: NSObject, ObservableObject {
                 // the UI thread in a straight fight with SwiftUI rendering —
                 // that was the on-wrist lag. Delegate events (a few per swing,
                 // not per frame) hop to main inside their handlers instead.
+                self.capture?.append(frame)
                 self.detector.ingest(frame)
             }
             isRunning = true
@@ -166,9 +173,20 @@ final class WatchController: NSObject, ObservableObject {
             // The phone needs the discipline to pick the matching pelvis
             // threshold. It rides on the session-start event rather than
             // ConfigSync because it changes per session, not per setup.
+            if isCapturing {
+                capturingLive = true
+                let rec = CaptureRecorder(device: "watch", discipline: discipline)
+                queue.addOperation { [self] in
+                    capture = rec
+                    detector.onTrace = { [weak self] t, label in
+                        self?.capture?.mark(t, label)
+                    }
+                }
+            }
             send(["event": "sessionStart",
                   "sessionID": sessionID.uuidString,
-                  "discipline": discipline.rawValue])
+                  "discipline": discipline.rawValue,
+                  "capturing": isCapturing])
         } catch {
             status = "Start failed: \(error.localizedDescription)"
         }
@@ -185,6 +203,18 @@ final class WatchController: NSObject, ObservableObject {
         state = .watching
         status = "Ended"
         send(["event": "sessionEnd"])
+        if isCapturing {
+            queue.addOperation { [self] in
+                defer { capture = nil; detector.onTrace = nil }
+                guard let rec = capture, let data = try? rec.data() else { return }
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("watch-capture-\(Int(Date().timeIntervalSince1970)).json")
+                guard (try? data.write(to: url)) != nil else { return }
+                WCSession.default.transferFile(url, metadata: ["kind": "capture"])
+            }
+            isCapturing = false
+            capturingLive = false
+        }
     }
 
     // MARK: Phone link

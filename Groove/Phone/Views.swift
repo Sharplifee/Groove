@@ -669,6 +669,18 @@ struct SetupView: View {
                 }
             }
             Note("A single file with every swing and its full motion trace, in case you want to look at it yourself.")
+
+            if let cap = c.captureExportURL() {
+                ShareLink(item: cap) {
+                    Text("Export diagnostic capture")
+                        .font(.grooveSubhead)
+                        .foregroundStyle(Color.cream)
+                        .frame(maxWidth: .infinity).padding(Space.m + 2)
+                        .background(Color.fairway,
+                                    in: RoundedRectangle(cornerRadius: Radius.small))
+                }
+                Note("The raw recording from your last captured session — every sensor frame from both devices plus every decision the detector made. Arm it from the watch before a session; send this file in and the session can be replayed through the engine exactly.")
+            }
         }
     }
 

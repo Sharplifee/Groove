@@ -321,5 +321,134 @@ do {
     }
 }
 
+
+// MARK: - Detector replay: the three range faults
+
+// These drive the real detector with synthetic frame streams reproducing the
+// misfires from the range visit, so the fixes can never silently regress.
+final class SwingRecorder: RoutineDetectorDelegate {
+    var swings: [Swing] = []
+    func detectorDidArm(confidence: Double) {}
+    func detectorDidDisarm() {}
+    func detectorDidFireTakeaway(confidence: Double) {}
+    func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) { swings.append(swing) }
+}
+
+func mf(_ t: Double, rot: Double, accel: Double) -> MotionFrame {
+    MotionFrame(t: t, accel: SIMD3(accel, 0, 0),
+                rotation: SIMD3(rot, 0, 0), gravity: SIMD3(0, -1, 0))
+}
+
+/// Builds a stream at 100 Hz from (duration, rotation, accel) segments.
+func stream(_ segs: [(Double, Double, Double)], from t0: Double = 0) -> [MotionFrame] {
+    var out: [MotionFrame] = []; var t = t0
+    for (dur, rot, acc) in segs {
+        for _ in 0..<Int(dur * 100) { out.append(mf(t, rot: rot, accel: acc)); t += 0.01 }
+    }
+    return out
+}
+
+// Fault 1: a slow warm-up swing whose impact lands ~2.3s after takeaway. The
+// old code let the 3s timeout keep running after the strike was found and
+// logged it as a rehearsal once the trace tail pushed past the limit.
+do {
+    let det = RoutineDetector(); let rec = SwingRecorder()
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var frames = stream([(1.2, 0.05, 0.01),      // settle
+                         (0.4, 1.6, 0.15),       // slow takeaway
+                         (1.4, 1.0, 0.20),       // long lazy backswing
+                         (0.2, 0.30, 0.15),      // transition pause (after 0.7s window)
+                         (0.3, 14.0, 0.30)])     // downswing builds speed
+    // The strike: one violent accel discontinuity.
+    let ti = frames.last!.t
+    frames += [mf(ti + 0.01, rot: 10, accel: 1.6)]
+    frames += stream([(1.0, 2.0, 0.25), (0.8, 0.05, 0.01)], from: ti + 0.02)
+    frames.forEach(det.ingest)
+    check("replay: the slow warm-up strike completes as struck, not rehearsal",
+          rec.swings.count == 1 && rec.swings[0].struck)
+}
+
+// Fault 2: a waggle at address sustains takeaway rotation then dies. The old
+// code entered a swing, timed out, logged a phantom rehearsal, and sat in
+// recovery while the REAL swing that followed went unseen.
+do {
+    let det = RoutineDetector(); let rec = SwingRecorder()
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    let frames = stream([(1.2, 0.05, 0.01),
+                         (0.12, 1.8, 0.20),      // the waggle
+                         (1.5, 0.10, 0.02)])     // back to address stillness
+    frames.forEach(det.ingest)
+    check("replay: a waggle aborts silently — no phantom rehearsal logged",
+          rec.swings.isEmpty)
+}
+
+// Fault 3: recovery released by time, not only stillness — a fidgety wrist
+// between balls must not leave the detector blind to the next swing.
+do {
+    let det = RoutineDetector(); let rec = SwingRecorder()
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    func swing(from t: Double) -> [MotionFrame] {
+        var f = stream([(0.4, 1.6, 0.15), (0.5, 6.0, 0.25)], from: t)
+        let ti = f.last!.t
+        f += [mf(ti + 0.01, rot: 8, accel: 1.5)]
+        f += stream([(1.0, 2.0, 0.25)], from: ti + 0.02)
+        return f
+    }
+    var frames = stream([(1.2, 0.05, 0.01)])
+    frames += swing(from: frames.last!.t + 0.01)
+    frames += stream([(3.0, 0.6, 0.10)], from: frames.last!.t + 0.01)  // fidget, never still
+    frames += swing(from: frames.last!.t + 0.01)
+    frames += stream([(1.0, 0.05, 0.01)], from: frames.last!.t + 0.01)
+    frames.forEach(det.ingest)
+    check("replay: fidgeting between balls cannot blind the detector",
+          rec.swings.filter(\.struck).count == 2)
+}
+
+
+// MARK: - Diagnostic capture round trip
+
+// A capture must survive serialisation and come back as the same frames —
+// otherwise replay analyses a different session than the one that happened.
+do {
+    let rec = CaptureRecorder(device: "watch", discipline: .fullSwing)
+    let frames = stream([(0.3, 1.2, 0.2)])
+    frames.forEach(rec.append)
+    rec.mark(0.15, "takeaway (armed=false)")
+    let data = try! rec.data()
+    let back = try! JSONDecoder().decode(CaptureStream.self, from: data)
+    let replayed = CaptureRecorder.frames(of: back)
+    check("capture: frames survive the round trip", replayed.count == frames.count)
+    check("capture: values survive the round trip",
+          replayed.first!.rotationMagnitude == frames.first!.rotationMagnitude
+          && replayed.last!.t == frames.last!.t)
+    check("capture: events ride along", back.events == [.init(t: 0.15, label: "takeaway (armed=false)")])
+    check("capture: the column contract is stamped in the file",
+          back.columns == CaptureColumns.count && back.version == CaptureColumns.version)
+}
+
+// The whole point: a captured stream replays through the real detector and
+// produces the same verdicts as the live session did.
+do {
+    let rec = CaptureRecorder(device: "watch", discipline: .fullSwing)
+    var frames = stream([(1.2, 0.05, 0.01), (0.4, 1.6, 0.15), (0.5, 6.0, 0.25)])
+    let ti = frames.last!.t
+    frames += [mf(ti + 0.01, rot: 8, accel: 1.5)]
+    frames += stream([(1.0, 2.0, 0.25), (0.8, 0.05, 0.01)], from: ti + 0.02)
+    frames.forEach(rec.append)
+    let back = try! JSONDecoder().decode(CaptureStream.self, from: rec.data())
+
+    let det = RoutineDetector(); let out = SwingRecorder()
+    det.delegate = out; det.discipline = .fullSwing; det.reset()
+    var narration: [String] = []
+    det.onTrace = { _, label in narration.append(label) }
+    CaptureRecorder.frames(of: back).forEach(det.ingest)
+    check("capture: a serialised session replays to the same struck verdict",
+          out.swings.count == 1 && out.swings[0].struck)
+    check("capture: the detector narrates its decisions during replay",
+          narration.contains { $0.hasPrefix("takeaway") }
+          && narration.contains { $0.hasPrefix("impact found") }
+          && narration.contains { $0.contains("STRUCK") })
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
