@@ -372,3 +372,16 @@ phone at session end; the phone merges both into one JSON bundle exportable
 from Setup. The detector is pure shared code, so a capture replays through the
 exact engine anywhere — the harness already proves a serialised session
 replays to the same verdicts. Misfires from the range become regression tests.
+
+## 33. Why the watch stayed on an old build, and why 99 swings sat unsent
+
+Two delivery faults, not code faults. The watch face fixes had shipped for
+several builds; the watch simply never took the update — TestFlight watch
+companions update far more reliably across a marketing-version change, so the
+app moves to 1.1 to force the update through. And the "99 waiting to sync"
+spool was a designed-in deadlock: acks went only over the instant channel,
+which requires the watch to be reachable at the exact moment the phone
+processes a swing, and every flush re-queued the entire spool without checking
+the system outbox — so undeliverable acks met a snowballing queue and the
+counter froze. Acks now also travel the durable channel and the watch listens
+on both; flush skips anything already in flight.

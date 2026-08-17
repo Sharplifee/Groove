@@ -491,9 +491,16 @@ extension PhoneController: WCSessionDelegate {
            let swing = try? JSONDecoder().decode(Swing.self, from: data) {
             Task { @MainActor in self.ingest(swing: swing) }
             // Tell the watch it can drop this from its spool. Without the ack
-            // the watch would resend forever.
-            if let id = payload["swingID"] as? String, WCSession.default.isReachable {
-                WCSession.default.sendMessage(["ack": id], replyHandler: nil, errorHandler: nil)
+            // the watch would resend forever. Two channels: the instant one
+            // when the watch happens to be reachable this exact moment, and a
+            // durable transfer that lands whenever it next can — reachability
+            // at processing time was the missing link that let spools grow to
+            // 99 and stay there.
+            if let id = payload["swingID"] as? String {
+                if WCSession.default.isReachable {
+                    WCSession.default.sendMessage(["ack": id], replyHandler: nil, errorHandler: nil)
+                }
+                WCSession.default.transferUserInfo(["ack": id])
             }
             return
         }

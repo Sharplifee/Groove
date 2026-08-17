@@ -224,7 +224,14 @@ final class WatchController: NSObject, ObservableObject {
     func flushSpool() {
         let session = WCSession.default
         guard session.activationState == .activated else { return }
-        for swing in spool.pending() {
+        // Anything already sitting in the system's outbox is on its way;
+        // queueing it again just makes the outbox longer and every delivery
+        // slower. The old version re-queued the entire spool on every flush,
+        // which is how "99 waiting to sync" became a permanent state.
+        let inFlight = Set(session.outstandingUserInfoTransfers.compactMap {
+            $0.userInfo["swingID"] as? String
+        })
+        for swing in spool.pending() where !inFlight.contains(swing.id.uuidString) {
             guard let data = try? JSONEncoder().encode(swing) else {
                 spool.remove(swing.id); continue
             }
@@ -361,9 +368,17 @@ extension WatchController: WCSessionDelegate {
         }
     }
 
-    /// Phone confirms receipt so the spool can drop it.
+    /// Phone confirms receipt so the spool can drop it. Acks arrive on two
+    /// channels — instant messages when both ends are live, durable userInfo
+    /// transfers otherwise — and the spool drains on either.
     nonisolated func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
-        guard let raw = message["ack"] as? String, let id = UUID(uuidString: raw) else { return }
+        handleAck(message)
+    }
+    nonisolated func session(_ s: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        handleAck(userInfo)
+    }
+    private nonisolated func handleAck(_ payload: [String: Any]) {
+        guard let raw = payload["ack"] as? String, let id = UUID(uuidString: raw) else { return }
         Task { @MainActor in self.acknowledge(id) }
     }
 }
