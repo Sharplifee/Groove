@@ -1,0 +1,83 @@
+name: ASC release
+# Uploading a build and RELEASING it to a tester group are two different
+# things. A build can sit VALID in App Store Connect forever, invisible in
+# TestFlight, because nothing ever attached it to a beta group. This job
+# reports the assignment state of recent builds and attaches the newest
+# processed build to every internal group — the step that actually puts a
+# build on a tester's phone.
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - name: Install App Store Connect API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$ASC_KEY_P8" | base64 --decode > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Report and release
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          pip3 install --quiet --break-system-packages pyjwt cryptography
+          python3 - <<'REL'
+          import json, os, time, urllib.request, urllib.error, jwt
+          kid, iss = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
+          key = open(os.path.expanduser(f"~/private_keys/AuthKey_{kid}.p8")).read()
+          tok = jwt.encode({"iss": iss, "iat": int(time.time()),
+                            "exp": int(time.time()) + 1200,
+                            "aud": "appstoreconnect-v1"},
+                           key, algorithm="ES256", headers={"kid": kid})
+          BASE = "https://api.appstoreconnect.apple.com"
+          def call(method, path, body=None):
+              data = json.dumps(body).encode() if body else None
+              r = urllib.request.Request(BASE + path, data=data, method=method,
+                                         headers={"Authorization": "Bearer " + tok,
+                                                  "Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(r) as resp:
+                      raw = resp.read()
+                      return json.loads(raw) if raw else None
+              except urllib.error.HTTPError as e:
+                  print(f"   !! {method} {path} -> {e.code}: {e.read().decode()[:400]}")
+                  return None
+
+          APP = "6801063220"
+          builds = call("GET", f"/v1/builds?filter[app]={APP}&sort=-version&limit=10")["data"]
+          groups = call("GET", f"/v1/betaGroups?filter[app]={APP}")["data"]
+          print("== BUILD ASSIGNMENT STATE ==")
+          for b in builds:
+              a = b["attributes"]
+              gs = call("GET", f"/v1/builds/{b['id']}/betaGroups")
+              names = [g["attributes"]["name"] for g in (gs or {}).get("data", [])]
+              print(f"  build {a['version']:>3} | {a['processingState']:<10} | "
+                    f"compliance={a.get('usesNonExemptEncryption')} | groups={names or 'NONE'}")
+
+          newest = next((b for b in builds if b["attributes"]["processingState"] == "VALID"), None)
+          if not newest:
+              print("!! no VALID build to release"); raise SystemExit(1)
+          bid, bver = newest["id"], newest["attributes"]["version"]
+          print(f"== RELEASING build {bver} to every group ==")
+          for g in groups:
+              gid, gname = g["id"], g["attributes"]["name"]
+              res = call("POST", f"/v1/betaGroups/{gid}/relationships/builds",
+                         {"data": [{"type": "builds", "id": bid}]})
+              print(f"   {gname}: attach requested")
+          # Verify from the build's own side.
+          gs = call("GET", f"/v1/builds/{bid}/betaGroups")
+          names = [g["attributes"]["name"] for g in (gs or {}).get("data", [])]
+          print(f"== VERIFY: build {bver} now in groups: {names or 'NONE'} ==")
+          if not names:
+              raise SystemExit("build still not attached to any group")
+          REL
+
+      - name: Clean up the key
+        if: always()
+        run: rm -f ~/private_keys/AuthKey_*.p8
