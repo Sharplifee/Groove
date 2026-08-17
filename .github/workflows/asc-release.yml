@@ -53,12 +53,19 @@ jobs:
           builds = call("GET", f"/v1/builds?filter[app]={APP}&sort=-version&limit=10")["data"]
           groups = call("GET", f"/v1/betaGroups?filter[app]={APP}")["data"]
           print("== BUILD ASSIGNMENT STATE ==")
+          # Read assignment from the GROUP side. Apple does not allow
+          # GET_RELATED on builds->betaGroups (only CREATE/DELETE), so the
+          # build-side query returns 403 and tells you nothing.
+          assigned = {}
+          for g in groups:
+              gb = call("GET", f"/v1/betaGroups/{g['id']}/builds?limit=200")
+              for b in (gb or {}).get("data", []):
+                  assigned.setdefault(b["id"], []).append(g["attributes"]["name"])
           for b in builds:
               a = b["attributes"]
-              gs = call("GET", f"/v1/builds/{b['id']}/betaGroups")
-              names = [g["attributes"]["name"] for g in (gs or {}).get("data", [])]
               print(f"  build {a['version']:>3} | {a['processingState']:<10} | "
-                    f"compliance={a.get('usesNonExemptEncryption')} | groups={names or 'NONE'}")
+                    f"compliance={a.get('usesNonExemptEncryption')} | "
+                    f"groups={assigned.get(b['id']) or 'NONE'}")
 
           newest = next((b for b in builds if b["attributes"]["processingState"] == "VALID"), None)
           if not newest:
@@ -70,9 +77,12 @@ jobs:
               res = call("POST", f"/v1/betaGroups/{gid}/relationships/builds",
                          {"data": [{"type": "builds", "id": bid}]})
               print(f"   {gname}: attach requested")
-          # Verify from the build's own side.
-          gs = call("GET", f"/v1/builds/{bid}/betaGroups")
-          names = [g["attributes"]["name"] for g in (gs or {}).get("data", [])]
+          # Verify from the group side, the only direction Apple supports.
+          names = []
+          for g in groups:
+              gb = call("GET", f"/v1/betaGroups/{g['id']}/builds?limit=200")
+              if any(b["id"] == bid for b in (gb or {}).get("data", [])):
+                  names.append(g["attributes"]["name"])
           print(f"== VERIFY: build {bver} now in groups: {names or 'NONE'} ==")
           if not names:
               raise SystemExit("build still not attached to any group")
