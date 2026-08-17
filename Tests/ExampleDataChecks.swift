@@ -450,5 +450,58 @@ do {
           && narration.contains { $0.contains("STRUCK") })
 }
 
+
+// MARK: - Top of backswing
+
+// A synthetic swing with a known top: quiet address, backswing, a clear pause,
+// then a ramp to impact. The old global-minimum rule put the top at address on
+// exactly this shape, because address is quieter than the top.
+do {
+    var frames: [MotionFrame] = []
+    var t = 0.0
+    func seg(_ dur: Double, _ rot: Double, _ acc: Double) {
+        for _ in 0..<Int(dur * 100) {
+            frames.append(mf(t, rot: rot, accel: acc)); t += 0.01
+        }
+    }
+    seg(0.8, 0.02, 0.005)   // address — the quietest part of the whole window
+    seg(0.7, 3.0, 0.10)     // backswing
+    seg(0.12, 0.20, 0.02)   // the top
+    seg(0.28, 9.0, 0.35)    // downswing
+    let impactIdx = frames.count - 1
+    let m = SwingAnalyzer.metrics(frames: frames, takeawayIdx: 80, impactIdx: impactIdx)
+    check("top: the downswing is measured from the top, not from address",
+          m.downswing > 0.22 && m.downswing < 0.42)
+    check("top: the backswing gets the rest of the swing",
+          m.backswing > 0.55 && m.backswing < 0.95)
+    check("top: tempo lands in a golfer's range rather than nonsense",
+          m.tempoRatio > 1.5 && m.tempoRatio < 4.0)
+}
+
+// A swing whose takeaway fired early (forward press) — extra quiet lead-in
+// must not become the "top" and swallow the whole swing into the downswing.
+do {
+    var frames: [MotionFrame] = []
+    var t = 0.0
+    func seg(_ dur: Double, _ rot: Double, _ acc: Double) {
+        for _ in 0..<Int(dur * 100) { frames.append(mf(t, rot: rot, accel: acc)); t += 0.01 }
+    }
+    seg(1.0, 0.01, 0.002)   // long dead lead-in
+    seg(0.6, 3.0, 0.10)
+    seg(0.10, 0.25, 0.02)
+    seg(0.30, 9.0, 0.35)
+    let m = SwingAnalyzer.metrics(frames: frames, takeawayIdx: 5, impactIdx: frames.count - 1)
+    check("top: an early takeaway cannot make the downswing swallow the swing",
+          m.downswing < 0.45)
+}
+
+// Reference rotation is calibrated to real swings, so a committed swing is
+// judged at full intensity rather than treated as a half effort.
+do {
+    check("reference: a real committed swing (14 rad/s) reads as full intensity",
+          SwingAnalyzer.effectiveImpactThreshold(
+            base: 110, peakRotation: 14, referenceRotation: Discipline.fullSwing.referenceRotation) == 110)
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

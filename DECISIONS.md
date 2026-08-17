@@ -399,3 +399,33 @@ the phone, not merely on Apple's servers. And assignment must be read from the
 group side (`/v1/betaGroups/{id}/builds`); Apple forbids GET_RELATED on
 `builds->betaGroups`, so the build-side query 403s and makes every build look
 unassigned whether it is or not.
+
+## 35. Real range data: the tempo numbers were a broken top-of-backswing detector
+
+367 swings across three sessions, exported from the phone. Findings and fixes:
+
+Tempo was nonsense and it was our fault, not the player's. Reported downswings
+ran 0.12 s to 1.03 s (84% coefficient of variation) and tempo ratios 0.29 to
+6.58 on swings that felt identical — a golfer's downswing is 0.25-0.32 s and
+barely moves. Cause: the top of the backswing was taken as the deepest
+rotation trough between takeaway and impact, but address is quieter than the
+top, so any swing with an early takeaway put the "top" at address and let the
+downswing swallow the whole swing; a single noisy sample could also win
+outright. The top is now the LAST sustained quiet stretch before impact —
+quiet relative to that swing's own downswing peak, sustained three samples so
+noise can't vote. On the same 92 struck swings, variation falls from 84% to
+34%.
+
+Reference rotation was guessed at 22 rad/s; real committed full swings peak
+near 14 (p75 of 92 strikes). Guessing high made every genuine swing look like
+a half effort. Corrected to 14.
+
+Two open items the data raises but doesn't settle: the struck-to-rehearsal
+ratio is 3:1 (92 struck, 275 rehearsals), which is high for range work and
+suggests real strikes are still being classed as rehearsals; and arm
+confidence does not separate the two populations (median 0.51 struck vs 0.49
+rehearsal) even though the underlying setup features clearly do — median setup
+duration 2.43 s struck vs 3.96 s rehearsal, transition sharpness 0.039 vs
+0.086. The template is not weighting the features that actually discriminate.
+Both need the raw diagnostic capture to settle rather than more inference from
+resampled traces.
