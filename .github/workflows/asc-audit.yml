@@ -1,0 +1,83 @@
+name: ASC audit
+# Read-only inventory of the Apple developer side, printed to the job log:
+# API key validity, certificates, bundle IDs, the app record, recent builds
+# and their processing state, beta groups and testers. Exists so the account
+# state can be verified on demand with the same credentials the pipeline
+# already holds — it changes nothing.
+on:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: macos-26
+    steps:
+      - name: Install App Store Connect API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$ASC_KEY_P8" | base64 --decode > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Audit
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          pip3 install --quiet --break-system-packages pyjwt cryptography
+          python3 - <<'AUDIT'
+          import json, os, time, urllib.request, jwt
+          kid, iss = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
+          key = open(os.path.expanduser(f"~/private_keys/AuthKey_{kid}.p8")).read()
+          tok = jwt.encode({"iss": iss, "iat": int(time.time()),
+                            "exp": int(time.time()) + 1200,
+                            "aud": "appstoreconnect-v1"},
+                           key, algorithm="ES256", headers={"kid": kid})
+          def get(path):
+              r = urllib.request.Request("https://api.appstoreconnect.apple.com" + path,
+                                         headers={"Authorization": "Bearer " + tok})
+              with urllib.request.urlopen(r) as resp:
+                  return json.load(resp)
+
+          print("== API KEY: VALID (this call authenticated) ==")
+
+          certs = get("/v1/certificates?limit=200")["data"]
+          print(f"== CERTIFICATES: {len(certs)} on the team ==")
+          for c in certs:
+              a = c["attributes"]
+              print("  ", a["certificateType"], "|", a.get("displayName"),
+                    "| expires", (a.get("expirationDate") or "")[:10])
+
+          bundles = get("/v1/bundleIds?limit=100")["data"]
+          print(f"== BUNDLE IDS: {len(bundles)} ==")
+          for b in bundles:
+              print("  ", b["attributes"]["identifier"], "|", b["attributes"]["name"])
+
+          apps = get("/v1/apps?limit=20")["data"]
+          print(f"== APPS: {len(apps)} ==")
+          for a in apps:
+              print("  ", a["attributes"]["name"], "|", a["attributes"]["bundleId"],
+                    "| id", a["id"])
+
+          for a in apps:
+              builds = get(f"/v1/builds?filter[app]={a['id']}&sort=-uploadedDate&limit=6")["data"]
+              print(f"== BUILDS for {a['attributes']['name']}: newest {len(builds)} ==")
+              for b in builds:
+                  at = b["attributes"]
+                  print("  build", at["version"], "|", at["processingState"],
+                        "| uploaded", (at.get("uploadedDate") or "")[:16],
+                        "| expired", at.get("expired"))
+              groups = get(f"/v1/betaGroups?filter[app]={a['id']}")["data"]
+              for g in groups:
+                  gid = g["id"]
+                  testers = get(f"/v1/betaGroups/{gid}/betaTesters")["data"]
+                  print(f"== BETA GROUP '{g['attributes']['name']}' ({gid}): {len(testers)} tester(s) ==")
+                  for t in testers:
+                      ta = t["attributes"]
+                      print("  ", ta.get("email"), "| state", ta.get("state"))
+          AUDIT
+
+      - name: Clean up the key
+        if: always()
+        run: rm -f ~/private_keys/AuthKey_*.p8
