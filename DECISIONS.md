@@ -493,3 +493,25 @@ nothing new), the struck count and last tempo in score-sized type, every
 tempo this session as a bar against the running mean, and repeatability plus
 the Groove Score computing live once three strikes exist rather than waiting
 for session end.
+
+## 39. Impact reads the swing it happened in
+
+Line-by-line pass through the engine with the field numbers in hand. The
+misclassification machine was the impact detector's single absolute jerk
+floor: a smooth swinger's strike arrives damped through the grip and ducks
+under any floor set high enough to ignore a vigorous practice swing — which is
+how three range sessions produced 275 "practice swings" against 92 strikes.
+A strike is not a big number; it is a discontinuity that stands out from the
+swing it happened in. The floor now self-normalises: the detector measures the
+swing's own jerk texture and demands a spike five times above it, bounded
+below at 55% of the scaled threshold so noise can't qualify on a buttery
+swing, and above at 140% so the caller's ceiling still holds. A rotation gate
+rejects sharp clunks at low speed — grounding the club, dropping a ball —
+which the absolute floor happily called impacts. Pinned by three new replay
+checks: the damped strike reads as struck, the rough ball-free swing stays a
+practice swing, the clunk at rest is nothing.
+
+The takeaway trigger also fired late on unhurried players (1.2 rad/s
+sustained is mid-backswing for a smooth takeaway); it drops to 1.0 with the
+floor at 0.42 — still nearly three times the stillness gate, and false starts
+are free now that waggles abort silently.

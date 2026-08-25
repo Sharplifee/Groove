@@ -311,8 +311,11 @@ do {
 // Takeaway scales with the discipline: the short game is visible now, and
 // idle wrist noise still can't start a swing.
 do {
+    // 1.0 rad/s: early enough to catch an unhurried takeaway from its first
+    // move (the old 1.2 fired mid-backswing on smooth players), still nearly
+    // three times the stillness gate so idle wrist noise can't start a swing.
     check("takeaway: full swing keeps a committed trigger",
-          Discipline.fullSwing.takeawayThreshold > 1.0)
+          Discipline.fullSwing.takeawayThreshold >= 0.95)
     check("takeaway: a putting stroke can actually trip it",
           Discipline.putting.takeawayThreshold < 0.5)
     for d in Discipline.allCases {
@@ -671,6 +674,61 @@ do {
                               tempos: [2.82, 2.98, 2.84, 2.96, 2.86, 2.94, 2.88, 2.92])
     check("narrator: real improvement over last session gets said",
           now.narrative(previous: prev).contains("tighter than last time"))
+}
+
+
+// MARK: - Impact detection reads the swing as it truly is
+
+// A smooth swinger's damped strike: the spike is well under the absolute
+// floor that a hard swing would need, but stands far above this swing's own
+// buttery texture. The old detector filed exactly this as a practice swing.
+do {
+    let det = RoutineDetector(); let rec = SwingRecorder()
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var frames = stream([(1.2, 0.05, 0.005),
+                         (0.4, 1.4, 0.06),       // gentle takeaway
+                         (0.6, 5.0, 0.08),       // smooth, low-jerk swing
+                         (0.25, 9.0, 0.10)])     // quiet downswing
+    let ti = frames.last!.t
+    frames += [mf(ti + 0.01, rot: 7, accel: 0.62)]   // damped strike: modest spike
+    frames += stream([(0.9, 1.5, 0.09), (0.9, 0.04, 0.005)], from: ti + 0.02)
+    frames.forEach(det.ingest)
+    check("impact: a damped strike on a smooth swing is read as struck",
+          rec.swings.count == 1 && rec.swings[0].struck)
+}
+
+// A vigorous practice swing with plenty of rough motion but no discontinuity
+// must stay a practice swing — its jerks never stand out from its own texture.
+do {
+    let det = RoutineDetector(); let rec = SwingRecorder()
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var frames = stream([(1.2, 0.05, 0.005), (0.4, 1.6, 0.20)])
+    // Rough, jerky, ball-free motion: alternate accel every sample.
+    var t = frames.last!.t + 0.01
+    for k in 0..<80 {
+        frames.append(mf(t, rot: 6.0, accel: k % 2 == 0 ? 0.32 : 0.18)); t += 0.01
+    }
+    frames += stream([(3.0, 0.04, 0.005)], from: t)
+    frames.forEach(det.ingest)
+    check("impact: a rough ball-free swing stays a practice swing",
+          rec.swings.count == 1 && !rec.swings[0].struck)
+}
+
+// A sharp clunk at low rotation — grounding the club mid-window — is not a
+// strike, however big the spike.
+do {
+    let det = RoutineDetector(); let rec = SwingRecorder()
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var frames = stream([(1.2, 0.05, 0.005),
+                         (0.4, 1.5, 0.10),
+                         (0.5, 4.0, 0.10),
+                         (0.4, 0.08, 0.02)])     // club comes to rest
+    let ti = frames.last!.t
+    frames += [mf(ti + 0.01, rot: 0.1, accel: 1.8)]  // huge clunk, near-zero rotation
+    frames += stream([(2.6, 0.05, 0.005)], from: ti + 0.02)
+    frames.forEach(det.ingest)
+    check("impact: a clunk at rest is not a strike",
+          rec.swings.count == 1 && !rec.swings[0].struck)
 }
 
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")

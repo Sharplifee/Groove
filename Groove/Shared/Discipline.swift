@@ -188,7 +188,7 @@ enum Discipline: String, Codable, CaseIterable, Identifiable, Sendable {
     /// tuned on the full swing; a putting stroke or a soft pitch never crosses
     /// it and the motion goes entirely unseen. Floored above the stillness
     /// gate (0.35) so idle wrist noise can't start a swing.
-    var takeawayThreshold: Double { max(0.45, 1.2 * motionScale) }
+    var takeawayThreshold: Double { max(0.42, 1.0 * motionScale) }
 
     /// Whether dropping the music is worth doing.
     ///
