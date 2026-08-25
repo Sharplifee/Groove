@@ -23,6 +23,7 @@ cp Tests/ExampleDataChecks.swift "$OUT/main.swift"
     Groove/Shared/Score.swift \
     Groove/Shared/RoutineDetector.swift \
     Groove/Shared/Capture.swift \
+    Groove/Shared/Narrator.swift \
     Groove/Phone/DemoData.swift \
     "$OUT/main.swift"
 "$OUT/checks"

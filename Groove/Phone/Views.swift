@@ -128,7 +128,7 @@ struct TodayView: View {
 
             if !c.config.hasCalibrated {
                 Card("teach it your swing") {
-                    Note("Until it has watched you hit a few balls, it can't tell a real swing from a rehearsal, so your music won't drop.")
+                    Note("Until it has watched you hit a few balls, it can't tell a real swing from a practice one, so your music won't drop.")
                     Button("Teach it now") { c.beginCalibration() }
                         .buttonStyle(PrimaryButton())
                 }
@@ -198,6 +198,26 @@ struct TrendCard: View {
 
 /// The broadcast hero: score ring on top, the three numbers that made it
 /// underneath, each with its change against the previous comparable session.
+/// The score, explained the way you'd say it out loud. Collapsed by default —
+/// one tap, three plain lines, no formula.
+struct WhatMakesThisNumber: View {
+    @State private var open = false
+    var body: some View {
+        DisclosureGroup(isExpanded: $open) {
+            Text("Mostly how tightly your timing repeats — that's about half of it. The rest is how smooth the motion is, and whether your hips lead your hands when the phone can see it.")
+                .font(.grooveCaption)
+                .foregroundStyle(.muted)
+                .padding(.top, Space.s)
+                .fixedSize(horizontal: false, vertical: true)
+        } label: {
+            Text("what makes this number")
+                .font(.grooveEyebrow)
+                .foregroundStyle(.muted)
+        }
+        .tint(.muted)
+    }
+}
+
 struct HeroCard: View {
     let session: RangeSession
     var previous: RangeSession?
@@ -209,7 +229,9 @@ struct HeroCard: View {
         Card(now.discipline.label.lowercased() + " · " +
              session.date.formatted(date: .abbreviated, time: .omitted)) {
             if let score = now.grooveScore, let verdict = now.scoreVerdict {
-                ScoreRing(score: score, verdict: verdict)
+                ScoreRing(score: score, verdict: verdict,
+                          narrative: now.narrative(previous: then))
+                WhatMakesThisNumber()
             } else {
                 Note("A few more \(now.discipline.countWord) and this session gets a score.")
             }
@@ -407,7 +429,7 @@ struct SessionCard: View {
 
             let rehearsals = session.swings.count - session.struckCount
             if rehearsals > 0 {
-                Note("\(rehearsals) rehearsal\(rehearsals == 1 ? "" : "s") ignored — practice swings don't count toward your numbers.")
+                Note("\(rehearsals) practice swing\(rehearsals == 1 ? "" : "s") set aside — they don't count toward your numbers.")
             }
 
             if onDelete != nil {

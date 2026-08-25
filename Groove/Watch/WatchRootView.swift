@@ -25,7 +25,7 @@ struct WatchRootView: View {
         case .armed:      return "ready"
         case .swinging:   return "music down"
         case .recovering: return "logging"
-        default:          return c.isRunning ? "music untouched" : "not running"
+        default:          return c.isRunning ? "music untouched" : "no session yet"
         }
     }
 
@@ -57,7 +57,7 @@ struct WatchRootView: View {
                     .foregroundStyle(.orange)
             }
             if c.unsentSwings > 0 {
-                Text("\(c.unsentSwings) waiting to sync")
+                Text("\(c.unsentSwings) swing\(c.unsentSwings == 1 ? "" : "s") syncing to your phone")
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
             }
@@ -235,7 +235,7 @@ struct WatchPreview: View {
         case .armed: return "ready"
         case .swinging: return "music down"
         case .recovering: return "logging"
-        default: return running ? "music untouched" : "not running"
+        default: return running ? "music untouched" : "no session yet"
         }
     }
 
@@ -257,7 +257,7 @@ struct WatchPreview: View {
                     .font(.system(size: 10)).foregroundStyle(.orange)
             }
             if unsent > 0 {
-                Text("\(unsent) waiting to sync")
+                Text("\(unsent) swing\(unsent == 1 ? "" : "s") syncing to your phone")
                     .font(.system(size: 9)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)

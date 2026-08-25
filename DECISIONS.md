@@ -455,3 +455,26 @@ History loading was all-or-nothing: `try? decode([Swing].self)` returned []
 if any single record failed, silently wiping the archive on any schema
 hiccup. Records now decode individually through a lossy wrapper; a corrupt
 record is dropped, the rest survive.
+
+## 37. The app speaks: a narrator, one vocabulary, and numbers that name their baseline
+
+Sweep of every user-facing surface for plain speech and legibility. The
+biggest gap wasn't tone — it was that the app showed numbers and never said
+what a session meant. Sessions now narrate themselves: one or two plain
+sentences on the hero, computed from the same measurements the tiles show —
+the score tier opens, and the single most useful specific fact follows, picked
+by priority (within-session quickening, then hips-vs-hands order, then a
+putting-specific truth), with an honest "not enough strokes to say anything"
+when the data can't back a story. Every sentence traces to a number; the
+narrator is pure shared code and its honesty is pinned in the harness — it
+must name a quickening session, must coach hands-before-hips, must admit thin
+data, must notice real improvement over last time, and may never run past two
+sentences.
+
+Smaller fixes riding along: the score ring gained a collapsed "what makes
+this number" line that explains the blend in one breath, no formula; delta
+chips now read "▲1.2 vs last" so the comparison names its baseline;
+"rehearsal" is gone from user-facing copy — they're practice swings
+everywhere, including the line that used both words in one sentence; and the
+watch face no longer says "not running" or "99 waiting to sync" but "no
+session yet" and "99 swings syncing to your phone".

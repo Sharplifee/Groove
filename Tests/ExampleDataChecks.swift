@@ -608,5 +608,70 @@ do {
           out.count == 1 && out[0].metrics.tempoRatio == 2.9)
 }
 
+
+// MARK: - The narrator speaks plainly and only what the data backs
+
+func narratorSession(reps: [Double], tempos: [Double], lead: Double? = nil,
+                     discipline: Discipline = .fullSwing) -> SessionSummary {
+    var swings: [Swing] = []
+    let n = max(reps.count, tempos.count)
+    for i in 0..<n {
+        let r = i < reps.count ? reps[i] : 5.0
+        var m = SwingMetrics()
+        m.discipline = discipline
+        m.backswing = 0.7 + r / 100
+        m.downswing = 0.25
+        m.tempoRatio = i < tempos.count ? tempos[i] : 2.8
+        m.smoothness = 70
+        m.pelvisLeadMs = lead
+        swings.append(Swing(struck: true,
+                            routine: RoutineSignature(plateauCount: 3, meanDwell: 0.5,
+                                                      totalSetupDuration: 2.5,
+                                                      transitionSharpness: 0.04,
+                                                      dwellVariance: 0.2),
+                            armConfidence: 0.6, metrics: m, normalizedTrace: []))
+    }
+    return SessionSummary(swings: swings)
+}
+
+do {
+    // A quickening session: tempo falls from ~3.0 to ~2.4 over twelve swings.
+    let tempos = [3.0, 3.0, 2.95, 2.9, 2.85, 2.8, 2.7, 2.6, 2.5, 2.45, 2.4, 2.4]
+    let s = narratorSession(reps: Array(repeating: 5.0, count: 12), tempos: tempos)
+    let line = s.narrative(previous: nil)
+    check("narrator: a quickening session gets named as one",
+          line.contains("quicker"))
+    check("narrator: never more than two sentences",
+          line.filter { $0 == "." }.count <= 3 && line.count < 260)
+}
+
+do {
+    // Hands-first sequencing is the one thing worth saying. Tempos vary a
+    // little (a score requires real spread) but not enough to be the story.
+    let s = narratorSession(reps: [],
+                            tempos: [2.9, 2.95, 2.85, 2.9, 2.92, 2.88], lead: -8)
+    check("narrator: hands-before-hips becomes the coaching line",
+          s.narrative(previous: nil).contains("hips"))
+}
+
+do {
+    // Too few strokes: the narrator says so instead of inventing a story.
+    let s = narratorSession(reps: [5.0, 5.0], tempos: [2.9, 2.9])
+    check("narrator: with too little data it says exactly that",
+          s.narrative(previous: nil).lowercased().contains("not enough"))
+}
+
+do {
+    // A genuinely tighter session than last time says so. Spread is the
+    // repeatability number, so the fixtures carry it directly: the earlier
+    // session wobbles ±0.35 around tempo 2.9, the newer one ±0.08.
+    let prev = narratorSession(reps: [],
+                               tempos: [2.55, 3.25, 2.6, 3.2, 2.65, 3.15, 2.7, 3.1])
+    let now = narratorSession(reps: [],
+                              tempos: [2.82, 2.98, 2.84, 2.96, 2.86, 2.94, 2.88, 2.92])
+    check("narrator: real improvement over last session gets said",
+          now.narrative(previous: prev).contains("tighter than last time"))
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

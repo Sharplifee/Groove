@@ -23,6 +23,9 @@ import SwiftUI
 struct ScoreRing: View {
     let score: Int
     let verdict: (title: String, detail: String)
+    /// The narrator's sentence(s) about this session. Falls back to the
+    /// verdict's canned detail if no narration was supplied.
+    var narrative: String?
     @State private var swept = false
 
     var body: some View {
@@ -57,7 +60,7 @@ struct ScoreRing: View {
             VStack(spacing: 3) {
                 Text(verdict.title)
                     .font(.grooveHeadline).foregroundStyle(.bone)
-                Text(verdict.detail)
+                Text(narrative ?? verdict.detail)
                     .font(.grooveCallout).foregroundStyle(.muted)
                     .multilineTextAlignment(.center)
             }
@@ -65,7 +68,7 @@ struct ScoreRing: View {
         .frame(maxWidth: .infinity)
         .onAppear { withAnimation(.easeOut(duration: 0.9).delay(0.15)) { swept = true } }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Groove score \(score) out of 100. \(verdict.title). \(verdict.detail)")
+        .accessibilityLabel("Groove score \(score) out of 100. \(verdict.title). \(narrative ?? verdict.detail)")
     }
 }
 
@@ -109,7 +112,11 @@ struct BroadcastTile: View {
                 if let unit { Text(unit).font(.grooveCallout).foregroundStyle(.muted) }
             }
             if let delta {
-                DeltaTag(text: delta.text, improved: delta.improved)
+                HStack(spacing: 4) {
+                    DeltaTag(text: delta.text, improved: delta.improved)
+                    Text("vs last")
+                        .font(.grooveEyebrow).foregroundStyle(.muted)
+                }
             } else {
                 // Keeps the three tiles the same height whether or not a
                 // previous session exists to compare against.
