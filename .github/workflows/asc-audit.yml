@@ -75,7 +75,10 @@ jobs:
                   print(f"== BETA GROUP '{g['attributes']['name']}' ({gid}): {len(testers)} tester(s) ==")
                   for t in testers:
                       ta = t["attributes"]
-                      print("  ", ta.get("email"), "| state", ta.get("state"))
+                      # This repo is public and so are these logs — mask PII.
+                      em = ta.get("email") or ""
+                      masked = (em[:2] + "***@" + em.split("@")[-1]) if "@" in em else "***"
+                      print("  ", masked, "| state", ta.get("state"))
           AUDIT
 
       - name: Clean up the key
