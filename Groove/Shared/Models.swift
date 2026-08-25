@@ -146,6 +146,11 @@ struct SwingMetrics: Codable, Equatable {
     var smoothness: Double = 0            // 0…100, from normalized jerk
     var peakRotation: Double = 0          // rad/s at the wrist
     var clipped = false                   // sensor saturated — treat peaks as a floor
+    /// Sharpest acceleration discontinuity in the swing window. Recorded for
+    /// rehearsals too, precisely so an export can show whether "rehearsals"
+    /// are hiding real strikes just under the floor. Optional so every record
+    /// saved before this field existed still decodes.
+    var peakJerk: Double?
 
     /// Populated only when a phone stream is present.
     var pelvisLeadMs: Double?             // positive = hips peaked before hands

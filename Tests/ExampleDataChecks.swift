@@ -503,5 +503,110 @@ do {
             base: 110, peakRotation: 14, referenceRotation: Discipline.fullSwing.referenceRotation) == 110)
 }
 
+
+// MARK: - Template confidence on real range data
+
+// Forty real routine signatures sampled from Connor's exported sessions,
+// twenty per class. The old similarity-ratio scorer put both medians inside
+// 0.48-0.51 — an unusable dial. The variance-aware scorer must hold a real
+// gap on the same data, and must never regress back into that dead band.
+do {
+    let struckSigs: [RoutineSignature] = [
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4933, totalSetupDuration: 4.8738, transitionSharpness: 0.0566, dwellVariance: 0.3592),
+        RoutineSignature(plateauCount: 5, meanDwell: 0.2800, totalSetupDuration: 6.0213, transitionSharpness: 0.1232, dwellVariance: 0.1091),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3100, totalSetupDuration: 5.4170, transitionSharpness: 0.1014, dwellVariance: 0.1246),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3625, totalSetupDuration: 1.9545, transitionSharpness: 0.0564, dwellVariance: 0.2331),
+        RoutineSignature(plateauCount: 1, meanDwell: 1.2700, totalSetupDuration: 1.2700, transitionSharpness: 0.0185, dwellVariance: 0.0000),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4767, totalSetupDuration: 1.8248, transitionSharpness: 0.0710, dwellVariance: 0.1050),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4667, totalSetupDuration: 3.9208, transitionSharpness: 0.5299, dwellVariance: 0.4007),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4533, totalSetupDuration: 1.5642, transitionSharpness: 0.0087, dwellVariance: 0.1358),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3625, totalSetupDuration: 5.5758, transitionSharpness: 0.0634, dwellVariance: 0.4184),
+        RoutineSignature(plateauCount: 1, meanDwell: 1.3900, totalSetupDuration: 1.3900, transitionSharpness: 0.0170, dwellVariance: 0.0000),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4567, totalSetupDuration: 3.6907, transitionSharpness: 0.0166, dwellVariance: 0.3408),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.3900, totalSetupDuration: 2.2565, transitionSharpness: 0.0249, dwellVariance: 0.1044),
+        RoutineSignature(plateauCount: 1, meanDwell: 1.3000, totalSetupDuration: 1.3000, transitionSharpness: 0.0109, dwellVariance: 0.0000),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3225, totalSetupDuration: 2.1275, transitionSharpness: 0.0391, dwellVariance: 0.1692),
+        RoutineSignature(plateauCount: 2, meanDwell: 0.6900, totalSetupDuration: 1.8352, transitionSharpness: 0.0150, dwellVariance: 0.4667),
+        RoutineSignature(plateauCount: 2, meanDwell: 0.7000, totalSetupDuration: 1.9036, transitionSharpness: 0.0504, dwellVariance: 0.2970),
+        RoutineSignature(plateauCount: 2, meanDwell: 0.6700, totalSetupDuration: 1.8036, transitionSharpness: 0.0429, dwellVariance: 0.0141),
+        RoutineSignature(plateauCount: 1, meanDwell: 1.3800, totalSetupDuration: 1.3800, transitionSharpness: 0.2090, dwellVariance: 0.0000),
+        RoutineSignature(plateauCount: 2, meanDwell: 0.6550, totalSetupDuration: 3.1092, transitionSharpness: 0.0074, dwellVariance: 0.4031),
+        RoutineSignature(plateauCount: 2, meanDwell: 0.6950, totalSetupDuration: 2.3864, transitionSharpness: 0.0163, dwellVariance: 0.2616)
+    ]
+    let rehSigs: [RoutineSignature] = [
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4767, totalSetupDuration: 2.7669, transitionSharpness: 0.0761, dwellVariance: 0.3592),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3300, totalSetupDuration: 5.2083, transitionSharpness: 0.0719, dwellVariance: 0.1288),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3075, totalSetupDuration: 4.1649, transitionSharpness: 0.0365, dwellVariance: 0.2691),
+        RoutineSignature(plateauCount: 5, meanDwell: 0.2760, totalSetupDuration: 3.8622, transitionSharpness: 0.1274, dwellVariance: 0.1293),
+        RoutineSignature(plateauCount: 2, meanDwell: 0.6150, totalSetupDuration: 2.6284, transitionSharpness: 0.0223, dwellVariance: 0.3465),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4900, totalSetupDuration: 2.0753, transitionSharpness: 0.2631, dwellVariance: 0.1473),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3375, totalSetupDuration: 4.4460, transitionSharpness: 0.0412, dwellVariance: 0.2056),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3425, totalSetupDuration: 5.8278, transitionSharpness: 0.1699, dwellVariance: 0.2208),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4633, totalSetupDuration: 2.8491, transitionSharpness: 0.2534, dwellVariance: 0.2272),
+        RoutineSignature(plateauCount: 5, meanDwell: 0.2860, totalSetupDuration: 2.6378, transitionSharpness: 0.1766, dwellVariance: 0.1167),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4533, totalSetupDuration: 5.5476, transitionSharpness: 0.4385, dwellVariance: 0.1922),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4567, totalSetupDuration: 4.9549, transitionSharpness: 0.1631, dwellVariance: 0.1940),
+        RoutineSignature(plateauCount: 2, meanDwell: 0.6800, totalSetupDuration: 1.4712, transitionSharpness: 0.0054, dwellVariance: 0.6930),
+        RoutineSignature(plateauCount: 4, meanDwell: 0.3200, totalSetupDuration: 6.0211, transitionSharpness: 0.0567, dwellVariance: 0.1978),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4567, totalSetupDuration: 5.5275, transitionSharpness: 0.3375, dwellVariance: 0.0777),
+        RoutineSignature(plateauCount: 5, meanDwell: 0.2980, totalSetupDuration: 4.0523, transitionSharpness: 0.0863, dwellVariance: 0.2481),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4067, totalSetupDuration: 2.2266, transitionSharpness: 0.0776, dwellVariance: 0.1665),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4400, totalSetupDuration: 1.8359, transitionSharpness: 0.0537, dwellVariance: 0.2381),
+        RoutineSignature(plateauCount: 3, meanDwell: 0.4400, totalSetupDuration: 2.5676, transitionSharpness: 0.2351, dwellVariance: 0.1952),
+        RoutineSignature(plateauCount: 1, meanDwell: 1.2400, totalSetupDuration: 1.2400, transitionSharpness: 0.0211, dwellVariance: 0.0000)
+    ]
+    var t = RoutineTemplate()
+    // Train on the first 12 of each, in alternating order as a range session
+    // would produce them; score the held-out 8 of each.
+    for i in 0..<12 { t.learn(struckSigs[i], struck: true); t.learn(rehSigs[i], struck: false) }
+    let sScores = struckSigs.suffix(8).map { t.confidence($0) }.sorted()
+    let rScores = rehSigs.suffix(8).map { t.confidence($0) }.sorted()
+    let sMed = sScores[sScores.count / 2], rMed = rScores[rScores.count / 2]
+    check("template: struck and rehearsal medians hold a usable gap on real data",
+          sMed - rMed > 0.10)
+    check("template: the population is no longer compressed into a dead band",
+          sMed > 0.52 || rMed < 0.45)
+}
+
+// Rehearsals carry their intensity numbers now, so an export can show whether
+// a "rehearsal" had a strike-shaped transient under the floor.
+do {
+    let det = RoutineDetector(); let rec = SwingRecorder()
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    let frames = stream([(1.2, 0.05, 0.01),
+                         (0.4, 1.6, 0.15),
+                         (0.6, 4.0, 0.20),
+                         (3.2, 0.05, 0.01)])          // no strike: times out
+    frames.forEach(det.ingest)
+    check("instrument: a rehearsal records its peak rotation",
+          rec.swings.count == 1 && !rec.swings[0].struck
+          && rec.swings[0].metrics.peakRotation > 3.0)
+    check("instrument: a rehearsal records its sharpest jerk",
+          (rec.swings[0].metrics.peakJerk ?? -1) >= 0)
+}
+
+// One corrupt record must not wipe the archive. (Mirrors the Lossy wrapper.)
+do {
+    struct Lossy<T: Decodable>: Decodable {
+        let value: T?
+        init(from decoder: Decoder) throws { value = try? T(from: decoder) }
+    }
+    var good = Swing(struck: true,
+                     routine: RoutineSignature(plateauCount: 3, meanDwell: 0.5,
+                                               totalSetupDuration: 3,
+                                               transitionSharpness: 0.05,
+                                               dwellVariance: 0.2),
+                     armConfidence: 0.7, metrics: SwingMetrics(), normalizedTrace: [])
+    good.metrics.tempoRatio = 2.9
+    let arr = try! JSONSerialization.jsonObject(
+        with: JSONEncoder().encode([good])) as! [Any]
+    let polluted = arr + [["garbage": true]]
+    let data = try! JSONSerialization.data(withJSONObject: polluted)
+    let out = (try? JSONDecoder().decode([Lossy<Swing>].self, from: data))?
+        .compactMap(\.value) ?? []
+    check("archive: a corrupt record is dropped, not the whole history",
+          out.count == 1 && out[0].metrics.tempoRatio == 2.9)
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

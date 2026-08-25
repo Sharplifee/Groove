@@ -429,3 +429,29 @@ duration 2.43 s struck vs 3.96 s rehearsal, transition sharpness 0.039 vs
 0.086. The template is not weighting the features that actually discriminate.
 Both need the raw diagnostic capture to settle rather than more inference from
 resampled traces.
+
+## 36. Full-app sweep against the field data: scorer, instrumentation, archive safety
+
+The repo is public now (Actions runs free and unlimited on standard runners —
+that was the billing unblock). Three changes from sweeping the whole app with
+the 367-record export as the guide:
+
+The template scorer was an unusable dial: on real labelled data the
+similarity-ratio confidence put every swing — struck and rehearsal alike —
+inside 0.48-0.51, so the arm threshold was a coin flip at any setting. The
+template now tracks per-feature variance per class and scores a Gaussian
+log-likelihood ratio: same features, same honest ceiling (they cap out near
+AUC 0.67), but medians land ~0.55 vs ~0.32, weighted by how tightly the
+player's own reps cluster rather than by hand-picked normalisers. Pinned by
+forty real signatures held out from Connor's own sessions. Old saved templates
+decode (variance fields optional) and retrain variance in a few reps.
+
+Rehearsals now record peakRotation and peakJerk (optional, decode-safe). 275
+"rehearsals" against 92 strikes was unanswerable from the export because
+rehearsals saved empty metrics; the next export can show exactly which
+rehearsals carried a strike-shaped transient just under the floor.
+
+History loading was all-or-nothing: `try? decode([Swing].self)` returned []
+if any single record failed, silently wiping the archive on any schema
+hiccup. Records now decode individually through a lossy wrapper; a corrupt
+record is dropped, the rest survive.

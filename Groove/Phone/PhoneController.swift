@@ -548,9 +548,21 @@ struct SwingStore {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("swings.json")
     }
+    /// Wraps each element so one undecodable record is dropped instead of
+    /// silently wiping the whole archive — which is exactly what
+    /// `try? decode([Swing].self)` did: any single schema hiccup in any one
+    /// record returned [] and a player's entire history vanished.
+    private struct Lossy<T: Decodable>: Decodable {
+        let value: T?
+        init(from decoder: Decoder) throws {
+            value = try? T(from: decoder)
+        }
+    }
+
     func load() -> [Swing] {
         guard let d = try? Data(contentsOf: url),
-              let s = try? JSONDecoder().decode([Swing].self, from: d) else { return [] }
+              let s = (try? JSONDecoder().decode([Lossy<Swing>].self, from: d))?
+                  .compactMap(\.value) else { return [] }
         return s
     }
     func save(_ swings: [Swing]) {

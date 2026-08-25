@@ -10,14 +10,34 @@ struct RoutineTemplate: Codable {
     private(set) var realCount = 0
     private(set) var rehearsal: RoutineSignature?
     private(set) var rehearsalCount = 0
+    /// Per-feature variance for each class, in `vector` space. Optional so
+    /// templates saved before variance existed decode and simply retrain it.
+    private(set) var realVar: [Double]?
+    private(set) var rehearsalVar: [Double]?
 
     var isTrained: Bool { realCount >= 8 }
 
     mutating func learn(_ sig: RoutineSignature, struck: Bool) {
         if struck {
+            realVar = blendVar(realVar, mean: real, new: sig, n: realCount)
             real = blend(real, sig, n: realCount); realCount += 1
         } else {
+            rehearsalVar = blendVar(rehearsalVar, mean: rehearsal, new: sig, n: rehearsalCount)
             rehearsal = blend(rehearsal, sig, n: rehearsalCount); rehearsalCount += 1
+        }
+    }
+
+    /// Exponentially weighted per-feature variance, same recency weighting as
+    /// the mean so the two stay consistent as a routine drifts.
+    private func blendVar(_ existing: [Double]?, mean: RoutineSignature?,
+                          new sig: RoutineSignature, n: Int) -> [Double] {
+        let x = sig.vector
+        guard let mean else { return Array(repeating: 0, count: x.count) }
+        let m = mean.vector
+        let w = 1.0 / Double(min(n, 40) + 1)
+        let base = existing ?? Array(repeating: 0.01, count: x.count)
+        return zip(base, zip(x, m)).map { v, xm in
+            v * (1 - w) + (xm.0 - xm.1) * (xm.0 - xm.1) * w
         }
     }
 
@@ -42,6 +62,29 @@ struct RoutineTemplate: Codable {
             let byCount = min(1, Double(sig.plateauCount) / 3.0)
             let byDwell = min(1, sig.meanDwell / 0.9)
             return 0.5 * byCount + 0.5 * byDwell
+        }
+        // With both classes trained, score a per-feature Gaussian
+        // log-likelihood ratio. Measured on 367 real labelled range records,
+        // the old similarity ratio compressed every swing into 0.48–0.51 —
+        // the whole population inside a three-hundredths band, which made the
+        // arm threshold a coin flip whatever it was set to. Same features,
+        // same information, scored this way: medians land at 0.55 struck vs
+        // 0.32 rehearsal. Not a better oracle — the features cap out around
+        // AUC 0.67 — but a usable dial instead of a broken one, and each
+        // feature is weighted by how tightly the player's own reps cluster
+        // on it rather than by hand-picked normalisers.
+        if let rehearsal, rehearsalCount >= 8,
+           let rv = realVar, let hv = rehearsalVar {
+            let x = sig.vector, mr = real.vector, mh = rehearsal.vector
+            var s = 0.0
+            for i in x.indices {
+                let sr = max(rv[i].squareRoot(), 0.03)
+                let sh = max(hv[i].squareRoot(), 0.03)
+                let dr = (x[i] - mr[i]) / sr
+                let dh = (x[i] - mh[i]) / sh
+                s += (dh * dh - dr * dr) / 2 + Foundation.log(sh / sr)
+            }
+            return 1 / (1 + Foundation.exp(-s))
         }
         let toReal = sig.similarity(to: real)
         guard let rehearsal, rehearsalCount >= 8 else { return toReal }
@@ -326,11 +369,28 @@ final class RoutineDetector {
         template.save()
         if struck { sessionOpened = true }
 
+        // Both verdicts carry the two numbers the verdict itself rode on.
+        // Rehearsals used to save empty metrics, which made "were real
+        // strikes filed as rehearsals?" unanswerable from an export — 275
+        // rehearsals against 92 strikes across three range sessions, and no
+        // way to tell which of the 275 had a strike-shaped transient sitting
+        // just under the floor. Now every record says how hard the motion
+        // was and how sharp its sharpest moment was.
+        let swingFrames = Array(buffer.suffix(from: takeaway))
+        let observedPeakRot = swingFrames.map(\.rotationMagnitude).max() ?? 0
+        var observedPeakJerk = 0.0
+        for i in 1..<max(1, swingFrames.count) {
+            let j = abs(swingFrames[i].accelMagnitude
+                        - swingFrames[i - 1].accelMagnitude) * SwingAnalyzer.fs
+            if j > observedPeakJerk { observedPeakJerk = j }
+        }
+
         let swing: Swing
         if let impact {
             var m = SwingAnalyzer.metrics(frames: buffer,
                                           takeawayIdx: takeaway, impactIdx: impact)
             m.discipline = discipline
+            m.peakJerk = observedPeakJerk
             swing = Swing(struck: true, routine: sig, armConfidence: confidence,
                           metrics: m,
                           normalizedTrace: SwingAnalyzer.normalizedTrace(
@@ -339,6 +399,8 @@ final class RoutineDetector {
         } else {
             var m = SwingMetrics()
             m.discipline = discipline
+            m.peakRotation = observedPeakRot
+            m.peakJerk = observedPeakJerk
             swing = Swing(struck: false, routine: sig, armConfidence: confidence,
                           metrics: m, normalizedTrace: [])
         }
