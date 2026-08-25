@@ -515,3 +515,18 @@ The takeaway trigger also fired late on unhurried players (1.2 rad/s
 sustained is mid-backswing for a smooth takeaway); it drops to 1.0 with the
 floor at 0.42 — still nearly three times the stillness gate, and false starts
 are free now that waggles abort silently.
+
+## 40. The sensitivity dial recalibrated to the scorer it serves
+
+Follow-up pass after the scorer rebuild caught a correction the rebuild
+itself created: the eager/balanced/strict thresholds (0.45/0.62/0.78) were
+tuned to the old similarity-ratio scale. Under the variance-aware scorer's
+real distribution — measured across all 367 labelled records — "balanced"
+armed on barely a third of real strikes and "strict" almost never fired.
+Recalibrated to the measured operating points: eager 0.35 (~73% of real
+strikes, accepting ~46% of practice swings), balanced 0.45 (~62%/34%),
+strict 0.55 (~49%/28%). The features cap near AUC 0.67, so these are the
+honest trade-offs, not promises. Pinned structurally: a harness check trains
+the template on the real fixtures and requires balanced to sit between the
+two class medians — if the scorer ever moves again, that check fails until
+the dial moves with it.

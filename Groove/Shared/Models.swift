@@ -31,10 +31,18 @@ enum Sensitivity: String, Codable, CaseIterable {
         }
     }
     var threshold: Double {
+        // Calibrated to the variance-aware scorer's real distribution, measured
+        // on 367 labelled range records — the old values (0.45/0.62/0.78) were
+        // tuned to the similarity-ratio scale it replaced, under which
+        // "balanced" armed on barely a third of real strikes and "strict"
+        // almost never fired. Measured on the same data these land at:
+        // eager ~73% of real strikes (accepting ~46% of practice swings),
+        // balanced ~62%/34%, strict ~49%/28%. The features cap near AUC 0.67,
+        // so these are the honest trade-offs available, not a promise.
         switch self {
-        case .eager: return 0.45
-        case .balanced: return 0.62
-        case .strict: return 0.78
+        case .eager: return 0.35
+        case .balanced: return 0.45
+        case .strict: return 0.55
         }
     }
 }
