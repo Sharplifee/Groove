@@ -478,3 +478,18 @@ chips now read "▲1.2 vs last" so the comparison names its baseline;
 everywhere, including the line that used both words in one sentence; and the
 watch face no longer says "not running" or "99 waiting to sync" but "no
 session yet" and "99 swings syncing to your phone".
+
+## 38. The phone goes live
+
+Everything now updates on the phone in realtime during a session, not just at
+the end. Two pieces. Delivery: each completed swing additionally fires over
+the instant channel when the phone is reachable that second — a sprint copy in
+front of the durable spool transfer, which remains the guarantee; the phone
+already dedupes by id, so whichever copy loses the race bounces off. Display:
+the Today tab's session card became a live board sized for a phone propped
+against the bag — the wrist's state mirrored in a word (watching / set /
+swinging / struck, driven by the same events that drive the audio, so it costs
+nothing new), the struck count and last tempo in score-sized type, every
+tempo this session as a bar against the running mean, and repeatability plus
+the Groove Score computing live once three strikes exist rather than waiting
+for session end.

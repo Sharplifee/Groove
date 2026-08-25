@@ -327,6 +327,17 @@ extension WatchController: RoutineDetectorDelegate {
         var stamped = swing
         stamped.sessionID = sessionID
         spool.enqueue(stamped)
+        // Realtime path: when the phone is reachable this instant, send the
+        // swing directly so the live display updates within the second. The
+        // durable spool transfer still runs and still owns delivery — this
+        // copy is a sprint, that one is the guarantee. The phone dedupes by
+        // id, so whichever arrives second is dropped on the floor.
+        if WCSession.default.isReachable,
+           let data = try? JSONEncoder().encode(stamped) {
+            WCSession.default.sendMessage(
+                ["swing": data, "swingID": stamped.id.uuidString],
+                replyHandler: nil, errorHandler: nil)
+        }
         flushSpool()
         unsentSwings = spool.count
       }

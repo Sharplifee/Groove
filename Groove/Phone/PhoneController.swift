@@ -18,6 +18,10 @@ final class PhoneController: NSObject, ObservableObject {
     }
     @Published var swings: [Swing] = []
     @Published var isSessionLive = false
+    /// What the watch is doing right now, in a word — mirrors the wrist so a
+    /// propped-up phone reads as live. Driven by the same events that drive
+    /// the audio, so it costs nothing new.
+    @Published var liveState = "watching"
     /// Kept because the paired-device host will need it, and because `status`
     /// reads from it. Not shown on the Range tab — that screen is deliberately
     /// not a live surface.
@@ -173,6 +177,7 @@ final class PhoneController: NSObject, ObservableObject {
 
     fileprivate func mirrorSessionStart(capturing: Bool = false) {
         guard !isSessionLive else { return }
+        liveState = "watching"
         t0 = Date()
         pelvis.removeAll(keepingCapacity: true)
         if capturing {
@@ -244,16 +249,19 @@ final class PhoneController: NSObject, ObservableObject {
         }
         switch event {
         case "arm":
+            liveState = "set"
             // Open the record session early so takeaway only has to raise a fader.
             disarmWork?.cancel()
             do { try audio.arm(preferring: config.route) }
             catch { status = "Couldn't open the mic: \(error.localizedDescription)" }
 
         case "takeaway":
+            liveState = "swinging"
             audio.duckForTakeaway()
             audioState = .ducked
 
         case "impact":
+            liveState = "struck"
             // The player has already heard the real strike through the earbud
             // seal. This is the amplified copy landing on top of ducked media.
             audio.fireImpactBurst()
@@ -274,6 +282,7 @@ final class PhoneController: NSObject, ObservableObject {
             scheduleDisarm(after: config.tailSeconds + 0.6)
 
         case "restore":
+            liveState = "watching"
             // Rehearsal. Correct fast rather than predict well.
             audio.restore(afterTail: 0)
             audioState = .full

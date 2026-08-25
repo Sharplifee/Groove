@@ -155,22 +155,101 @@ struct TodayView: View {
         .shadow(color: Elevation.card, radius: Elevation.cardRadius, y: Elevation.cardY)
     }
 
+    // The live board: everything the session knows, updating swing by swing,
+    // sized to be read from a phone propped against the bag. Swings arrive
+    // over the instant channel within the second; the durable spool remains
+    // the guarantee behind it.
     private var liveHeader: some View {
-        VStack(spacing: Space.s) {
+        let s = c.summary
+        let tempos = s.struckSwings.map(\.metrics.tempoRatio).filter { $0 > 0 }
+        return VStack(spacing: Space.m) {
             HStack(spacing: Space.s) {
                 Circle().fill(Color.amber).frame(width: 9, height: 9)
                     .shadow(color: Color.amber.opacity(0.6), radius: 4)
-                Text("Session running").font(.grooveHeadline)
+                Text("LIVE").font(.grooveEyebrow).kerning(2).foregroundStyle(.amber)
+                Spacer()
+                Text(c.liveState)
+                    .font(.grooveHeadline)
+                    .foregroundStyle(c.liveState == "struck" ? Color.turf :
+                                     c.liveState == "swinging" ? Color.amber : Color.muted)
+                    .contentTransition(.opacity)
             }
-            Text("\(c.summary.struckSwings.count)")
-                .font(.grooveScore).foregroundStyle(.bone)
-                .contentTransition(.numericText())
-            Text(c.summary.discipline.countWord + " so far")
-                .font(.grooveCallout).foregroundStyle(.muted)
+
+            HStack(alignment: .firstTextBaseline, spacing: Space.l) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(s.struckSwings.count)")
+                        .font(.grooveScore).foregroundStyle(.bone)
+                        .contentTransition(.numericText())
+                    Text(s.discipline.countWord)
+                        .font(.grooveCallout).foregroundStyle(.muted)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(tempos.last.map { String(format: "%.2f", $0) } ?? "—")
+                        .font(.grooveScore).foregroundStyle(.turf)
+                        .contentTransition(.numericText())
+                    Text("last tempo").font(.grooveCallout).foregroundStyle(.muted)
+                }
+            }
+
+            if tempos.count >= 2 {
+                LiveTempoStrip(tempos: tempos)
+                    .frame(height: 44)
+            }
+
+            if s.hasScore {
+                HStack(spacing: Space.l) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(String(format: "%.1f%%", s.repeatability))
+                            .font(.grooveStat).foregroundStyle(.bone)
+                            .contentTransition(.numericText())
+                        Text("repeatability").font(.grooveEyebrow).foregroundStyle(.muted)
+                    }
+                    Spacer()
+                    if let score = s.grooveScore {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("\(score)")
+                                .font(.grooveStat).foregroundStyle(.amber)
+                                .contentTransition(.numericText())
+                            Text("groove so far").font(.grooveEyebrow).foregroundStyle(.muted)
+                        }
+                    }
+                }
+            } else {
+                Note("A few more \(s.discipline.countWord) and the score starts running.")
+            }
+
+            if s.rehearsals.count > 0 {
+                Text("\(s.rehearsals.count) practice swing\(s.rehearsals.count == 1 ? "" : "s") set aside")
+                    .font(.grooveCaption).foregroundStyle(.muted)
+            }
         }
-        .frame(maxWidth: .infinity).padding(.vertical, Space.xl)
+        .padding(Space.l)
+        .frame(maxWidth: .infinity)
         .background(Color.panel, in: RoundedRectangle(cornerRadius: Radius.large))
         .shadow(color: Elevation.card, radius: Elevation.cardRadius, y: Elevation.cardY)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Live session: \(s.struckSwings.count) \(s.discipline.countWord), watch is \(c.liveState)")
+    }
+}
+
+/// Every tempo this session as a bar against the running mean — the phone
+/// version of the wrist strip, wide enough to show the whole bucket.
+struct LiveTempoStrip: View {
+    let tempos: [Double]
+    var body: some View {
+        let mean = tempos.reduce(0, +) / Double(tempos.count)
+        HStack(alignment: .bottom, spacing: 3) {
+            ForEach(Array(tempos.suffix(40).enumerated()), id: \.offset) { _, t in
+                let dev = mean == 0 ? 0 : (t - mean) / mean
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(abs(dev) <= 0.10 ? Color.turf : Color.amber)
+                    .frame(width: 5,
+                           height: max(8, min(44, 22 + dev * 90)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("Tempo of each swing this session against your average")
     }
 }
 
