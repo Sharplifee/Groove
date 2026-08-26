@@ -84,6 +84,7 @@ jobs:
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          PROTECTED_CERT_IDS: ${{ vars.PROTECTED_CERT_IDS }}
         run: |
           pip3 install --quiet --break-system-packages pyjwt cryptography
           python3 - <<'PRUNE'
@@ -101,15 +102,34 @@ jobs:
                   headers=H, method=method)
               with urllib.request.urlopen(r) as resp:
                   return json.load(resp) if method == "GET" else None
+          # PROTECTED_CERT_IDS holds certificates that belong to OTHER apps and
+          # whose private keys are retained in those repos' secrets. They are
+          # NOT orphans and must survive this prune. Before this guard existed
+          # the filter matched every certificate on the team, so each push to
+          # this repo silently revoked the signing certs of squad-comms,
+          # momentum, scribbly and nearfield — every other iOS pipeline on
+          # team XF783932R2 broke, repeatedly, for reasons that looked like
+          # they originated in those repos.
+          protected = {i.strip() for i in
+                       os.environ.get("PROTECTED_CERT_IDS", "").split(",")
+                       if i.strip()}
           certs = call("GET", "/v1/certificates?limit=200")["data"]
-          doomed = [c for c in certs if c["attributes"]["certificateType"]
+          doomed = [c for c in certs
+                    if c["attributes"]["certificateType"]
                     in ("DEVELOPMENT", "DISTRIBUTION", "IOS_DEVELOPMENT",
-                        "IOS_DISTRIBUTION")]
+                        "IOS_DISTRIBUTION")
+                    and c["id"] not in protected]
+          for c in certs:
+              if c["id"] in protected:
+                  print("PROTECTED, left alone:", c["id"],
+                        c["attributes"]["certificateType"],
+                        c["attributes"].get("displayName", ""))
           for c in doomed:
               call("DELETE", "/v1/certificates/" + c["id"])
               print("revoked", c["attributes"]["certificateType"],
                     c["attributes"].get("displayName", ""), c["id"])
-          print(f"{len(doomed)} orphaned certificate(s) cleared")
+          print(f"{len(doomed)} orphaned certificate(s) cleared, "
+                f"{len(protected)} protected")
           PRUNE
 
       # No -sdk here. It would override the SDK for every target in the scheme
