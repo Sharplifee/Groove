@@ -95,6 +95,7 @@ jobs:
             -archivePath build/Groove.xcarchive \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             2>&1 | tee archive.log
 
       - name: Export IPA
