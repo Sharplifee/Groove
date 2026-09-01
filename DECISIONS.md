@@ -530,3 +530,15 @@ honest trade-offs, not promises. Pinned structurally: a harness check trains
 the template on the real fixtures and requires balanced to sit between the
 two class medians — if the scorer ever moves again, that check fails until
 the dial moves with it.
+
+## 41. Replay is one command
+
+Tools/replay-capture.sh takes an exported diagnostic capture bundle and runs
+its watch stream through the real RoutineDetector, printing every verdict
+with its metrics next to what the wrist decided live, and flagging any
+disagreement — which is by definition a logic change between the recording
+build and the current engine. `--narrate` prints the engine's full decision
+narration frame by frame. Proven end to end on a synthetic bundle shaped
+exactly like the app's export. The moment a real range capture lands, the
+3:1 question gets answered against actual swings rather than resampled
+traces.
