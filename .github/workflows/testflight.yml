@@ -207,17 +207,36 @@ jobs:
                     target["attributes"]["processingState"] if target else "not visible")
               target = None; time.sleep(30)
           if not target: raise SystemExit(f"build {VERSION} never became VALID")
+
+          # Two kinds of beta group, and they release completely differently.
+          #  - EXTERNAL groups take an explicit build assignment (POST builds).
+          #  - INTERNAL groups REJECT that POST ("Builds cannot be assigned to
+          #    this internal group", 422) and instead surface every build to
+          #    their testers automatically WHEN the group was created with
+          #    hasAccessToAllBuilds — a create-only flag that cannot be PATCHed
+          #    on afterwards. An internal group without it silently shows the
+          #    testers nothing, which is how a green run shipped no build twice.
+          # So: assign to external groups, and for internal availability assert
+          # the build's own state rather than a group attachment that is either
+          # impossible or automatic.
+          externals = []
           for g in call("GET", f"/v1/betaGroups?filter[app]={APP}")["data"]:
+              if g["attributes"].get("isInternalGroup"): continue
               call("POST", f"/v1/betaGroups/{g['id']}/relationships/builds",
                    {"data":[{"type":"builds","id":target["id"]}]})
-              print("   attached to", g["attributes"]["name"])
-          landed = []
-          for g in call("GET", f"/v1/betaGroups?filter[app]={APP}")["data"]:
-              gb = call("GET", f"/v1/betaGroups/{g['id']}/builds?limit=200")
-              if any(b["id"] == target["id"] for b in (gb or {}).get("data", [])):
-                  landed.append(g["attributes"]["name"])
-          print("== released to:", landed or "NOTHING", "==")
-          if not landed: raise SystemExit("uploaded but not released")
+              externals.append(g["attributes"]["name"])
+              print("   assigned to external group", g["attributes"]["name"])
+
+          # The real proof for internal testers: the build has entered beta
+          # testing. VALID alone is not enough; compliance or review can hold a
+          # VALID build out of testers' hands.
+          detail = call("GET", f"/v1/builds/{target['id']}/buildBetaDetail")
+          state = ((detail or {}).get("data") or {}).get("attributes", {}).get("internalBuildState")
+          print("   internalBuildState =", state)
+          if state != "IN_BETA_TESTING":
+              raise SystemExit(f"build {VERSION} is {state}, not IN_BETA_TESTING — "
+                               "not actually available to internal testers")
+          print(f"== build {VERSION} IN_BETA_TESTING; external groups: {externals or 'none'} ==")
           RELEASE
 
       - name: Clean up
