@@ -6,12 +6,6 @@ enum Handedness: String, Codable, CaseIterable { case right, left }
 enum Wrist: String, Codable, CaseIterable { case left, right }
 enum Pocket: String, Codable, CaseIterable { case backRight, backLeft, none }
 
-enum AudioRoute: String, Codable, CaseIterable {
-    case earbuds        // default — any brand, HFP / wired / USB-C
-    case phoneMic
-    case pairedDevice   // companion app on iPad / Mac / 2nd iPhone
-}
-
 /// Named rather than numeric. "0.62" means nothing to a golfer.
 enum Sensitivity: String, Codable, CaseIterable {
     case eager, balanced, strict
@@ -31,14 +25,15 @@ enum Sensitivity: String, Codable, CaseIterable {
         }
     }
     var threshold: Double {
-        // Calibrated to the variance-aware scorer's real distribution, measured
-        // on 367 labelled range records — the old values (0.45/0.62/0.78) were
-        // tuned to the similarity-ratio scale it replaced, under which
-        // "balanced" armed on barely a third of real strikes and "strict"
-        // almost never fired. Measured on the same data these land at:
-        // eager ~73% of real strikes (accepting ~46% of practice swings),
-        // balanced ~62%/34%, strict ~49%/28%. The features cap near AUC 0.67,
-        // so these are the honest trade-offs available, not a promise.
+        // PROVISIONAL. These were measured on the 367-record export, and that
+        // export turned out to be pitching and chipping inside 15 yards with
+        // the watch left in Full-swing mode (DECISIONS 43) — so the 73/62/49%
+        // operating points describe a wedge routine, not a full-swing one.
+        // They are kept because they are the only measured numbers that exist;
+        // re-derive from a genuine full-swing diagnostic capture before
+        // treating them as calibrated. The features cap near AUC 0.67 on that
+        // data, so whatever the true numbers are, they are trade-offs, not
+        // promises.
         switch self {
         case .eager: return 0.35
         case .balanced: return 0.45
@@ -51,7 +46,6 @@ struct Config: Codable, Equatable {
     var handedness: Handedness = .right
     var watchWrist: Wrist = .left
     var pocket: Pocket = .backRight
-    var route: AudioRoute = .earbuds
 
     /// Seconds to hold the duck after impact so the strike and turf aren't
     /// stepped on by the media coming back.
@@ -153,6 +147,10 @@ struct SwingMetrics: Codable, Equatable {
     var transitionSharpness: Double = 0
     var smoothness: Double = 0            // 0…100, from normalized jerk
     var peakRotation: Double = 0          // rad/s at the wrist
+    /// Milliseconds between the wrist's rotation peak and impact. This is the
+    /// hands half of sequencing: the phone measures the same interval for the
+    /// hips, and the difference is the lead. Optional so old records decode.
+    var wristPeakLeadMs: Double?
     var clipped = false                   // sensor saturated — treat peaks as a floor
     /// Sharpest acceleration discontinuity in the swing window. Recorded for
     /// rehearsals too, precisely so an export can show whether "rehearsals"
@@ -160,8 +158,11 @@ struct SwingMetrics: Codable, Equatable {
     /// saved before this field existed still decodes.
     var peakJerk: Double?
 
-    /// Populated only when a phone stream is present.
-    var pelvisLeadMs: Double?             // positive = hips peaked before hands
+    /// Populated only when a phone stream is present. Positive = the hips'
+    /// rotation peak came before the hands' rotation peak, each measured
+    /// against its own device's impact transient. Before 2026-09-01 this held
+    /// hip-peak-to-impact alone, which is positive on every swing ever made.
+    var pelvisLeadMs: Double?
 }
 
 struct Swing: Codable, Identifiable, Equatable {

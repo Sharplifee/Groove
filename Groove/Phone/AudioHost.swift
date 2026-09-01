@@ -8,9 +8,9 @@ protocol AudioHost: AnyObject {
     var isArmed: Bool { get }
     var isAlive: Bool { get }
     func startSession() throws
-    func arm(preferring route: AudioRoute) throws
+    func arm() throws
     func duckForTakeaway()
-    func fireImpactBurst()
+    func fireImpactBurst(struckAgo: TimeInterval)
     func restore(afterTail tail: TimeInterval)
     func disarm()
     func endSession()
@@ -194,11 +194,10 @@ final class LocalAudioHost: NSObject, AudioHost {
 
     /// Starts the rolling buffer. No category change, no route change, nothing
     /// audible - the tap exists only so there is something to slice at impact.
-    func arm(preferring route: AudioRoute) throws {
-        // Route is no longer used to pick an input. Without `.allowBluetooth`
-        // there is no earbud mic to choose, so capture always comes from the
-        // phone — which is where a pocketed phone was recording from anyway.
-        _ = route
+    func arm() throws {
+        // Capture always comes from the phone. Without `.allowBluetooth` there
+        // is no earbud mic to choose, which is why the old route setting did
+        // nothing and has been removed.
         guard isAlive else { throw AudioError.sessionNotStarted }
         guard !isArmed else { return }
 
@@ -288,7 +287,7 @@ final class LocalAudioHost: NSObject, AudioHost {
     /// The real strike has already reached the player's ears through the earbud
     /// seal; this is the amplified copy landing on top of ducked media, not a
     /// second live feed to beat against it.
-    func fireImpactBurst() {
+    func fireImpactBurst(struckAgo: TimeInterval = 0) {
         guard isAlive, isArmed else { return }
 
         ringLock.lock()
@@ -304,10 +303,13 @@ final class LocalAudioHost: NSObject, AudioHost {
         let count = min(window, available)
         guard count > 32 else { ringLock.unlock(); return }
 
-        // The tap runs behind real time, so the newest sample sits just before
-        // the write head. Back up by the pre-roll, then take the window.
+        // The strike happened `struckAgo` seconds ago (detect→send→here). The
+        // newest sample sits just before the write head, so the strike sits
+        // `struckAgo` further back. Reach to it, then add the pre-roll so the
+        // burst opens with the club arriving. Clamped to what the ring holds.
+        let strikeBack = min(Int(struckAgo * rate) + preRoll + count, available)
         var slice = [Float](repeating: 0, count: count)
-        var read = write - preRoll - count
+        var read = write - strikeBack
         while read < 0 { read += capacity }
         for i in 0..<count {
             slice[i] = ring[(read + i) % capacity]

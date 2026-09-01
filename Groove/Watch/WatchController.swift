@@ -202,7 +202,17 @@ final class WatchController: NSObject, ObservableObject {
         isRunning = false
         state = .watching
         status = "Ended"
-        send(["event": "sessionEnd"])
+        // Ship the learned templates so they survive a watch reinstall — the
+        // marketing-version bumps that force watch updates (DECISIONS 33) wipe
+        // watch UserDefaults, and the template is twenty labelled reps of work.
+        var payload: [String: Any] = ["event": "sessionEnd"]
+        let templates = RoutineTemplate.exportAll()
+        if !templates.isEmpty,
+           let blob = try? JSONSerialization.data(withJSONObject:
+               templates.mapValues { $0.base64EncodedString() }) {
+            payload["templates"] = blob
+        }
+        send(payload)
         if isCapturing {
             queue.addOperation { [self] in
                 defer { capture = nil; detector.onTrace = nil }
@@ -302,6 +312,14 @@ extension WatchController: RoutineDetectorDelegate {
       }
     }
 
+    nonisolated func detectorDidDetectImpact(wasArmed: Bool) {
+      Task { @MainActor in
+        // The strike is happening NOW. The phone needs this immediately to
+        // slice the burst; the completed swing (with its trace) follows.
+        if wasArmed, discipline.ducksAudio { send(["event": "impact"]) }
+      }
+    }
+
     nonisolated func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) {
       Task { @MainActor in
         state = .recovering
@@ -315,7 +333,12 @@ extension WatchController: RoutineDetectorDelegate {
                 tempos.append(swing.metrics.tempoRatio)
                 if tempos.count > 200 { tempos.removeFirst() }
             }
-            if wasArmed { send(["event": "impact"]) }
+            // Every struck swing tells the phone to snapshot sequencing, armed
+            // or not — an unarmed strike (a third of them under "balanced")
+            // used to arrive with no sequencing at all, biasing the average to
+            // the confident swings only. Audio already fired from
+            // detectorDidDetectImpact; this is data, so it goes for all strikes.
+            send(["event": "struck"])
             // Confirms the swing logged, so he never has to look at the watch.
             Haptic.captured()
         } else {

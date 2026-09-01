@@ -178,17 +178,27 @@ enum Discipline: String, Codable, CaseIterable, Identifiable, Sendable {
     /// intensity the impact floors were calibrated against. Feeds the
     /// intensity scaling so a warm-up half swing isn't judged on a
     /// full-commitment floor.
-    /// Calibrated against 92 real range swings: committed full swings peak
-    /// around 14 rad/s at the wrist (p75), not the 22 this was first guessed
-    /// at. Guessing high made every genuine swing look like a half effort and
-    /// dropped the strike floor further than intended.
+    ///
+    /// 22 for the full swing. It was lowered to 14 on 2026-08-25 from "92 real
+    /// full swings" that were later found to be pitches logged with the watch
+    /// in Full-swing mode (DECISIONS 43); 14 rad/s is a committed *pitch*,
+    /// which is exactly what 22 × 0.28 ≈ 6 predicts a pitch should be scaled
+    /// against — so the pitching row below is the one that data actually
+    /// calibrates. Restored to 22 in 1e087ee.
     var referenceRotation: Double { 22.0 * motionScale }
 
     /// Takeaway trigger, scaled to the discipline. The old fixed 1.4 rad/s was
     /// tuned on the full swing; a putting stroke or a soft pitch never crosses
-    /// it and the motion goes entirely unseen. Floored above the stillness
-    /// gate (0.35) so idle wrist noise can't start a swing.
+    /// it and the motion goes entirely unseen. Floored at 1.2× the stillness
+    /// gate (`RoutineDetector.stillnessRotation`, 0.35) so idle wrist noise
+    /// can't start a swing. It is 1.2×, not "nearly three times" as DECISIONS
+    /// 39 said — the harness now asserts the real ratio.
     var takeawayThreshold: Double { max(0.42, 1.0 * motionScale) }
+
+    /// Nominal takeaway-to-impact span for this discipline, used to normalise
+    /// the smoothness score's duration term so a 0.4 s putt and a 1.1 s full
+    /// swing are judged on the same scale (DECISIONS 43).
+    var nominalSwingDuration: TimeInterval { tracePre }
 
     /// Whether dropping the music is worth doing.
     ///

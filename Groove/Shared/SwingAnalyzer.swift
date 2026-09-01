@@ -49,8 +49,15 @@ enum SwingAnalyzer {
             deviation[i] = varSum.squareRoot()
         }
 
+        // A purely relative threshold gave every window plateaus: a wrist that
+        // never stops still has a quietest quartile, so a fidgeting rehearsal
+        // produced holds with dwells and edges just like a deliberate setup,
+        // and the feature set threw away the absolute stillness that actually
+        // separates the two. Relative refinement, absolute ceiling: a "hold"
+        // has to be genuinely still, not merely stiller than the rest.
         let sorted = deviation.sorted()
-        let threshold = sorted[Int(0.25 * Double(sorted.count - 1))]
+        let relative = sorted[Int(0.25 * Double(sorted.count - 1))]
+        let threshold = min(relative, absoluteHoldDeviation)
         let minSamples = Int(minDwell * fs)
 
         var result: [Plateau] = []
@@ -69,6 +76,11 @@ enum SwingAnalyzer {
         }
         return result
     }
+
+    /// Gravity-vector spread (g) above which a wrist is moving, not holding.
+    /// A settled wrist sits near 0.01–0.02; a slow drift through a fidgety
+    /// setup runs 0.08 and up.
+    static let absoluteHoldDeviation: Double = 0.06
 
     private static func orientationDelta(_ frames: [MotionFrame], around idx: Int) -> Double {
         let back = max(0, idx - Int(0.4 * fs))
@@ -121,6 +133,19 @@ enum SwingAnalyzer {
     static func impactIndex(_ frames: [MotionFrame],
                             from: Int = 0,
                             threshold: Double = wristImpactThreshold) -> Int? {
+        impactCrossing(frames, from: from, threshold: threshold)?.index
+    }
+
+    /// Where the strike crossed the floor, with the sub-sample fraction of
+    /// the way from `index - 1` to `index` at which the jerk envelope crossed.
+    /// At 100 Hz a downswing is 25–32 samples, so whole-sample timing alone
+    /// carries ±5–7% of ratio jitter before the golfer adds any — under the
+    /// "very consistent" band the score awards. Interpolating the crossing is
+    /// what puts that band inside what the sensor can resolve.
+    static func impactCrossing(_ frames: [MotionFrame],
+                               from: Int = 0,
+                               threshold: Double = wristImpactThreshold)
+        -> (index: Int, fraction: Double, jerk: Double)? {
         let skip = Int(0.25 * fs)
         let start = max(from + skip, 1)
         guard frames.count > start + 2 else { return nil }
@@ -158,10 +183,36 @@ enum SwingAnalyzer {
             let i = start + k
             if frames[i].rotationMagnitude >= rotGate
                 || frames[max(0, i - 1)].rotationMagnitude >= rotGate {
-                return i
+                let prev = k > 0 ? jerks[k - 1] : 0
+                let span = jerk - prev
+                let fraction = span > 0 ? max(0, min(1, (floor - prev) / span)) : 1
+                return (i, fraction, jerk)
             }
         }
         return nil
+    }
+
+    /// Jerk at one sample, same definition `impactCrossing` uses, so the
+    /// detector can ask "is this candidate still the sharpest thing so far"
+    /// without recomputing the whole envelope.
+    static func jerk(_ frames: [MotionFrame], at i: Int) -> Double {
+        guard i > 0, i < frames.count else { return 0 }
+        return abs(frames[i].accelMagnitude - frames[i - 1].accelMagnitude) * fs
+    }
+
+    /// The moment the club actually started back: walk from the trigger
+    /// sample back to the last frame that was genuinely still. The trigger
+    /// fires only after rotation has been above threshold for six samples,
+    /// which is well into the takeaway, so timing the backswing from it
+    /// undercounts every backswing by a variable amount and drags the tempo
+    /// ratio below its true value.
+    static func trueTakeawayIndex(_ frames: [MotionFrame], trigger: Int,
+                                  stillRotation: Double,
+                                  maxLookback: TimeInterval = 0.6) -> Int {
+        let floor = max(0, trigger - Int(maxLookback * fs))
+        var i = trigger
+        while i > floor, frames[i - 1].rotationMagnitude > stillRotation { i -= 1 }
+        return i
     }
 
     /// Impact threshold scaled to the swing that's actually happening.
@@ -210,11 +261,25 @@ enum SwingAnalyzer {
 
     static func metrics(frames: [MotionFrame],
                         takeawayIdx: Int,
-                        impactIdx: Int) -> SwingMetrics {
+                        impactIdx: Int,
+                        impactFraction: Double = 1.0,
+                        discipline: Discipline = .fullSwing,
+                        stillRotation: Double = 0.35) -> SwingMetrics {
         var m = SwingMetrics()
+        m.discipline = discipline
         guard impactIdx > takeawayIdx, impactIdx < frames.count else { return m }
 
-        let swing = Array(frames[takeawayIdx...impactIdx])
+        // Timing runs on the frames' own timestamps, not on index / 100. The
+        // sensor clock is what the samples were taken on; an index assumes a
+        // perfect 100 Hz that a busy watch does not deliver, and the two
+        // disagree most mid-swing, when the detector is working hardest.
+        let startIdx = trueTakeawayIndex(frames, trigger: takeawayIdx,
+                                         stillRotation: stillRotation)
+        let tStart = frames[startIdx].t
+        let tImpact = frames[impactIdx - 1].t
+            + (frames[impactIdx].t - frames[impactIdx - 1].t) * impactFraction
+
+        let swing = Array(frames[startIdx...impactIdx])
 
         // Top of backswing = the LAST sustained quiet moment before impact.
         //
@@ -264,13 +329,29 @@ enum SwingAnalyzer {
             lowest = frames[topIdx].rotationMagnitude
         }
 
-        m.backswing = Double(topIdx - takeawayIdx) / fs
-        m.downswing = Double(impactIdx - topIdx) / fs
+        // Sub-sample the top the same way as impact: where rotation crossed
+        // back above the quiet line between topIdx and the next sample.
+        var tTop = frames[topIdx].t
+        if topIdx + 1 < frames.count, topIdx > takeawayIdx {
+            let a = frames[topIdx].rotationMagnitude, b = frames[topIdx + 1].rotationMagnitude
+            let quietLine = lowest * 1.8
+            if b > a, b > quietLine, a <= quietLine {
+                let f = (quietLine - a) / (b - a)
+                tTop += (frames[topIdx + 1].t - frames[topIdx].t) * max(0, min(1, f))
+            }
+        }
+
+        m.backswing = max(0, tTop - tStart)
+        m.downswing = max(0, tImpact - tTop)
         m.tempoRatio = m.downswing > 0 ? m.backswing / m.downswing : 0
         m.transitionDwell = dwell(frames, around: topIdx, below: max(0.6, lowest * 1.8))
         m.transitionSharpness = sharpness(frames, at: topIdx)
-        m.peakRotation = swing.map(\.rotationMagnitude).max() ?? 0
-        m.smoothness = smoothnessScore(swing)
+        if let peak = swing.enumerated().max(by: { $0.element.rotationMagnitude < $1.element.rotationMagnitude }) {
+            m.peakRotation = peak.element.rotationMagnitude
+            // Hands half of sequencing: how long before impact the wrist peaked.
+            m.wristPeakLeadMs = max(0, tImpact - peak.element.t) * 1000
+        }
+        m.smoothness = smoothnessScore(swing, nominalDuration: discipline.nominalSwingDuration)
         m.clipped = didClip(swing)
         return m
     }
@@ -291,7 +372,14 @@ enum SwingAnalyzer {
     /// Normalized dimensionless jerk, mapped to 0…100 so it reads as a score.
     /// Speed-independent by construction — a slow smooth swing and a fast smooth
     /// swing both score well.
-    private static func smoothnessScore(_ f: [MotionFrame]) -> Double {
+    /// The duration term is raised to the fifth power, so left raw a 0.4 s
+    /// putting stroke and a 1.1 s full swing differ by ~150× before the log
+    /// and the short game scores structurally smoother than the long game
+    /// from the same player. Duration is expressed relative to the
+    /// discipline's nominal window so every discipline is judged on the same
+    /// scale — the same reason repeatability carries `repeatabilityScale`.
+    private static func smoothnessScore(_ f: [MotionFrame],
+                                        nominalDuration: TimeInterval = tracePre) -> Double {
         guard f.count > 3 else { return 0 }
         let mags = f.map(\.accelMagnitude)
         var jerkSq = 0.0
@@ -301,8 +389,9 @@ enum SwingAnalyzer {
         }
         let duration = Double(f.count) / fs
         let peak = mags.max() ?? 1
-        guard peak > 0, duration > 0 else { return 0 }
-        let dimensionless = (jerkSq * pow(duration, 5) / (peak * peak)).squareRoot()
+        guard peak > 0, duration > 0, nominalDuration > 0 else { return 0 }
+        let relative = duration / nominalDuration
+        let dimensionless = (jerkSq * pow(relative, 5) * pow(tracePre, 5) / (peak * peak)).squareRoot()
         return max(0, min(100, 100 - 12 * log10(max(1, dimensionless))))
     }
 
@@ -334,6 +423,12 @@ enum SwingAnalyzer {
             seg = frames[lo...hi].map(\.accelMagnitude)
         }
         return resample(seg, to: traceLength)
+    }
+
+    /// Test surface: the discipline-normalised smoothness of a raw window,
+    /// so the harness can prove two disciplines score the same motion alike.
+    static func metricsSmoothnessProbe(_ frames: [MotionFrame], discipline: Discipline) -> Double {
+        smoothnessScore(frames, nominalDuration: discipline.nominalSwingDuration)
     }
 
     static func resample(_ x: [Double], to n: Int) -> [Double] {

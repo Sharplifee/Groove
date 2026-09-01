@@ -242,6 +242,10 @@ final class PhoneController: NSObject, ObservableObject {
 
     // MARK: Watch events
 
+    /// Seconds since the watch stamped the event currently being handled.
+    /// The burst uses it to reach back to the true strike in the ring buffer.
+    private var sinceEventSent: TimeInterval = 0
+
     private func handle(event: String, confidence: Double) {
         if capture != nil {
             let t = Date().timeIntervalSince(t0)
@@ -252,7 +256,7 @@ final class PhoneController: NSObject, ObservableObject {
             liveState = "set"
             // Open the record session early so takeaway only has to raise a fader.
             disarmWork?.cancel()
-            do { try audio.arm(preferring: config.route) }
+            do { try audio.arm() }
             catch { status = "Couldn't open the mic: \(error.localizedDescription)" }
 
         case "takeaway":
@@ -262,24 +266,28 @@ final class PhoneController: NSObject, ObservableObject {
 
         case "impact":
             liveState = "struck"
-            // The player has already heard the real strike through the earbud
-            // seal. This is the amplified copy landing on top of ducked media.
-            audio.fireImpactBurst()
+            // Fired from the watch the instant the strike was confirmed, and
+            // stamped, so the burst can slice the ring at the real strike
+            // rather than at the newest sample — the strike happened `age`
+            // ago, plus the fixed detect→send hop. Everything the player
+            // already heard through the earbud seal; this is the amplified
+            // copy on top of ducked media.
+            audio.fireImpactBurst(struckAgo: sinceEventSent)
             audio.restore(afterTail: config.tailSeconds)
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(config.tailSeconds))
                 audioState = .full
             }
-            // Snapshot sequencing NOW. Swings arrive over transferUserInfo,
-            // which can lag minutes behind a 15 s pelvis buffer — by then the
-            // window is gone or belongs to a different swing entirely.
-            pendingPelvisLead = pelvisLeadMs()
-            pendingPelvisAt = Date()
-
-            // Stop the rolling buffer once the tail is done. There is no HFP
-            // penalty any more, so this is just housekeeping rather than the
-            // load-bearing teardown it used to be.
             scheduleDisarm(after: config.tailSeconds + 0.6)
+
+        case "struck":
+            // Data-only: snapshot sequencing for every strike, armed or not.
+            // Swings arrive over transferUserInfo minutes behind a 15 s pelvis
+            // buffer, so the window must be captured at the strike, not on
+            // arrival.
+            liveState = "struck"
+            pendingPelvisLead = pelvisPeakToImpactMs()
+            pendingPelvisAt = Date()
 
         case "restore":
             liveState = "watching"
@@ -318,9 +326,12 @@ final class PhoneController: NSObject, ObservableObject {
         // Pelvis sequencing is the one metric a single sensor cannot produce.
         // Attach the snapshot taken at impact, and only if it plausibly belongs
         // to this swing rather than an older one.
-        if swing.struck, let lead = pendingPelvisLead, let at = pendingPelvisAt,
-           abs(at.timeIntervalSince(swing.date)) < 20 {
-            swing.metrics.pelvisLeadMs = lead
+        if swing.struck, let hipLead = pendingPelvisLead, let at = pendingPelvisAt,
+           abs(at.timeIntervalSince(swing.date)) < 20,
+           let handLead = swing.metrics.wristPeakLeadMs {
+            // The number the app reports: how much earlier the hips peaked
+            // than the hands. Positive = lower body leads, which is the goal.
+            swing.metrics.pelvisLeadMs = hipLead - handLead
         }
         pendingPelvisLead = nil
         pendingPelvisAt = nil
@@ -340,10 +351,17 @@ final class PhoneController: NSObject, ObservableObject {
         }
     }
 
-    /// Milliseconds by which pelvis angular velocity peaked before the wrist.
-    /// Positive is correct sequencing. Both streams are anchored on the impact
-    /// transient, so no cross-device clock sync is required.
-    private func pelvisLeadMs() -> Double? {
+    /// Milliseconds the hips' rotation peak preceded impact, measured on the
+    /// phone. This is only the HIPS half of sequencing — the hands half
+    /// (`wristPeakLeadMs`) is measured on the watch and rides in with the
+    /// swing. The lead the app reports is hipLead − handLead, computed in
+    /// `ingest` once both halves are in hand.
+    ///
+    /// Until 2026-09-01 this value alone was reported as "hips led hands",
+    /// which every swing satisfies by construction — the hips always peak
+    /// before their own impact — so the sequencing score and the coaching
+    /// line were positive on every full swing regardless of the truth.
+    private func pelvisPeakToImpactMs() -> Double? {
         guard config.pocket != .none else { return nil }
         // Only the full swing turns the hips enough for a pocket phone to read.
         guard discipline.reportsSequencing else { return nil }
@@ -352,21 +370,23 @@ final class PhoneController: NSObject, ObservableObject {
         let op = BlockOperation { [self] in buf = pelvis }
         queue.addOperations([op], waitUntilFinished: true)
         guard buf.count > Int(SwingAnalyzer.fs) else { return nil }
-        guard let impact = SwingAnalyzer.impactIndex(
+        guard let cross = SwingAnalyzer.impactCrossing(
                 buf, threshold: discipline.pelvisImpactThreshold) else { return nil }
+        let impact = cross.index
+        let tImpact = buf[impact - 1].t
+            + (buf[impact].t - buf[impact - 1].t) * cross.fraction
         let lo = max(0, impact - Int(1.2 * SwingAnalyzer.fs))
         let window = Array(buf[lo..<impact])
         // The placement setting says where the phone is SUPPOSED to be. On a
-        // hot day it comes out of the pocket and gets parked by the ball or
-        // under the bag, still playing music — and ground shock from a strike
-        // a foot away can fake a hip transient. So the window itself is asked
-        // whether it came off a body, per swing: parked, sequencing silently
-        // sits out; back in the pocket, it resumes. No setting to remember.
+        // hot day it comes out of the pocket and gets parked by the ball,
+        // where ground shock can fake a hip transient. So the window is asked
+        // whether it came off a body, per swing.
         guard SwingAnalyzer.isOnBody(window) else { return nil }
         guard let peak = window.enumerated().max(by: {
             $0.element.rotationMagnitude < $1.element.rotationMagnitude
         }) else { return nil }
-        return Double(window.count - peak.offset) / SwingAnalyzer.fs * 1000
+        // Time on the same clock as the impact, so the subtraction is honest.
+        return max(0, (tImpact - window[peak.offset].t) * 1000)
     }
 
     /// Both halves land asynchronously — the phone stream at session end, the
@@ -513,6 +533,12 @@ extension PhoneController: WCSessionDelegate {
             }
             return
         }
+        if let blob = payload["templates"] as? Data,
+           let dict = try? JSONSerialization.jsonObject(with: blob) as? [String: String] {
+            let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let url = dir.appendingPathComponent("templates-backup.json")
+            try? JSONEncoder().encode(dict).write(to: url, options: .atomic)
+        }
         guard let event = payload["event"] as? String else { return }
         let confidence = payload["confidence"] as? Double ?? 0
         let sentDiscipline = (payload["discipline"] as? String)
@@ -531,6 +557,7 @@ extension PhoneController: WCSessionDelegate {
         let age = (payload["sentAt"] as? TimeInterval)
             .map { Date().timeIntervalSince1970 - $0 }
         let isStale = (age ?? 0) > 60
+        let eventAge = max(0, age ?? 0)
         let isFresh = age.map { $0 <= 60 } ?? false
         if isStale { return }
 
@@ -545,7 +572,7 @@ extension PhoneController: WCSessionDelegate {
                 self.mirrorSessionStart()
             }
             if event == "sessionStart" { self.mirrorSessionStart(capturing: capturing) }
-            else { self.handle(event: event, confidence: confidence) }
+            else { self.sinceEventSent = eventAge; self.handle(event: event, confidence: confidence) }
         }
     }
 }

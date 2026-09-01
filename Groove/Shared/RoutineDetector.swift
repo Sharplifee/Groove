@@ -92,16 +92,38 @@ struct RoutineTemplate: Codable {
         return toReal / max(0.001, toReal + toRehearsal)
     }
 
-    static let key = "groove.template"
-    static func load() -> RoutineTemplate {
-        guard let d = UserDefaults.standard.data(forKey: key),
-              let t = try? JSONDecoder().decode(RoutineTemplate.self, from: d) else {
-            return RoutineTemplate()
+    private static func key(for d: Discipline) -> String { "groove.template." + d.rawValue }
+
+    static func load(for d: Discipline) -> RoutineTemplate {
+        // Migrate the single legacy template into the full-swing slot the
+        // first time it's asked for, so nobody loses a trained model.
+        if let data = UserDefaults.standard.data(forKey: key(for: d)),
+           let t = try? JSONDecoder().decode(RoutineTemplate.self, from: data) {
+            return t
         }
-        return t
+        if d == .fullSwing,
+           let legacy = UserDefaults.standard.data(forKey: "groove.template"),
+           let t = try? JSONDecoder().decode(RoutineTemplate.self, from: legacy) {
+            return t
+        }
+        return RoutineTemplate()
     }
-    func save() {
-        if let d = try? JSONEncoder().encode(self) { UserDefaults.standard.set(d, forKey: Self.key) }
+
+    func save(for d: Discipline) {
+        if let data = try? JSONEncoder().encode(self) {
+            UserDefaults.standard.set(data, forKey: Self.key(for: d))
+        }
+    }
+
+    /// All four templates, encoded, for shipping to the phone so the learned
+    /// model survives a watch reinstall (DECISIONS 33 forces those). Keyed by
+    /// discipline rawValue.
+    static func exportAll() -> [String: Data] {
+        var out: [String: Data] = [:]
+        for d in Discipline.allCases {
+            if let data = UserDefaults.standard.data(forKey: key(for: d)) { out[d.rawValue] = data }
+        }
+        return out
     }
 }
 
@@ -117,6 +139,15 @@ protocol RoutineDetectorDelegate: AnyObject {
     func detectorDidFireTakeaway(confidence: Double)
     /// Fires for every completed swing, armed or not, struck or not.
     func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool)
+    /// Fires the instant a strike is confirmed, before the trace tail accrues.
+    /// This is what the audio burst must key off — waiting for completion adds
+    /// the whole trace-tail plus transfer latency, so the burst slices turf
+    /// instead of the strike. Default no-op so existing delegates need not care.
+    func detectorDidDetectImpact(wasArmed: Bool)
+}
+
+extension RoutineDetectorDelegate {
+    func detectorDidDetectImpact(wasArmed: Bool) {}
 }
 
 /// # Capture and arming are independent
@@ -134,8 +165,12 @@ final class RoutineDetector {
     /// nothing on the hot path.
     var onTrace: ((TimeInterval, String) -> Void)?
     private(set) var state: DetectorState = .watching
-    private(set) var template = RoutineTemplate.load()
+    private(set) var template = RoutineTemplate.load(for: .fullSwing)
     var config = Config.load()
+
+    /// Replace the live template. Used by the replay tool to reproduce the
+    /// exact arming the wrist did in the field; not used in the app.
+    func installTemplate(_ t: RoutineTemplate) { template = t }
 
     /// What the player is practising. Set from the watch before a session
     /// starts, and it changes the detector's numbers rather than just a label:
@@ -143,7 +178,22 @@ final class RoutineDetector {
     /// A putt crosses 9 g at the wrist where a full iron crosses 110, so
     /// running one discipline's threshold over another's data means the
     /// crossing never happens and the stroke is never recorded.
-    var discipline: Discipline = .fullSwing
+    /// Rotation below which the wrist counts as still. One source of truth:
+    /// the takeaway trigger floors at 1.2× this, and metrics time the backswing
+    /// from the last frame under it.
+    static let stillnessRotation: Double = 0.35
+
+    var discipline: Discipline = .fullSwing {
+        didSet {
+            guard discipline != oldValue else { return }
+            // Each discipline has its own routine — a putting setup and a
+            // full-swing setup are different shapes and must not be averaged
+            // into one arming model. Persist the outgoing one, load the
+            // incoming one.
+            template.save(for: oldValue)
+            template = RoutineTemplate.load(for: discipline)
+        }
+    }
 
     /// True once this session has seen its first struck ball.
     private(set) var sessionOpened = false
@@ -158,6 +208,7 @@ final class RoutineDetector {
     /// a swing with a detected strike must never be logged as a rehearsal just
     /// because it was slow getting there.
     private var pendingImpact: Int?
+    private var pendingImpactFraction: Double = 1.0
     private var recoverStart: TimeInterval?
     private var armConfidence: Double = 0
     private var isArmed = false
@@ -177,7 +228,7 @@ final class RoutineDetector {
         buffer.removeAll(keepingCapacity: true)
         state = .watching
         settleStart = nil; armedAt = nil; takeawayIdx = nil
-        pendingImpact = nil; recoverStart = nil; swingPeakRotation = 0
+        pendingImpact = nil; pendingImpactFraction = 1.0; recoverStart = nil; swingPeakRotation = 0
         isArmed = false; wasArmedForThisSwing = false
         armConfidence = 0
         samplesSinceSignature = 0
@@ -227,7 +278,7 @@ final class RoutineDetector {
     private var isStill: Bool {
         guard buffer.count > 20 else { return false }
         return buffer.suffix(20).allSatisfy {
-            $0.rotationMagnitude < 0.35 && $0.accelMagnitude < 0.12
+            $0.rotationMagnitude < Self.stillnessRotation && $0.accelMagnitude < 0.12
         }
     }
 
@@ -272,6 +323,7 @@ final class RoutineDetector {
         onTrace?(buffer.last?.t ?? 0, "takeaway (armed=\(isArmed))")
         swingPeakRotation = 0
         pendingImpact = nil
+        pendingImpactFraction = 1.0
         takeawayIdx = max(0, buffer.count - 8)
         wasArmedForThisSwing = isArmed
         state = .swinging
@@ -293,13 +345,44 @@ final class RoutineDetector {
             peakRotation: swingPeakRotation,
             referenceRotation: discipline.referenceRotation)
 
-        if pendingImpact == nil {
-            pendingImpact = SwingAnalyzer.impactIndex(buffer, from: takeaway,
-                                                      threshold: floor)
-            if let p = pendingImpact {
-                onTrace?(f.t, String(format: "impact found (floor %.0f, peak rot %.1f, idx %d)",
-                                     floor, swingPeakRotation, p))
+        if pendingImpact == nil,
+           let cross = SwingAnalyzer.impactCrossing(buffer, from: takeaway, threshold: floor) {
+            // A crossing is only a strike if it is the sharpest thing in the
+            // swing — the self-normalising idea from DECISIONS 39, which until
+            // now only held in the harness because live this ran on a growing
+            // buffer and locked the first crossing before the real peak
+            // existed. Wait for a short lookahead and take the candidate only
+            // if nothing sharper follows it; a wrist-cock or grip re-set spikes
+            // early and is then beaten by the real strike. But a genuine strike
+            // often lands within a few samples of the newest frame, so once the
+            // lookahead exists and the candidate still dominates, lock it —
+            // and never discard it, since the tail arrives on later ticks.
+            let candidate = cross.index
+            let confirmFor = Int(0.06 * SwingAnalyzer.fs)
+            let haveLookahead = buffer.count - 1 - candidate >= confirmFor
+            if haveLookahead {
+                // Skip the strike's own ring-down: the transient's rebound one
+                // or two samples later is nearly as sharp as the strike itself,
+                // and comparing against it rejected every real strike. Look
+                // past it for a genuinely separate, sharper event.
+                let ringDown = 3
+                let lo = candidate + 1 + ringDown
+                let hi = candidate + confirmFor + ringDown
+                let after = (lo...hi).compactMap {
+                    $0 < buffer.count ? SwingAnalyzer.jerk(buffer, at: $0) : nil
+                }.max() ?? 0
+                if cross.jerk >= after {
+                    pendingImpact = candidate
+                    pendingImpactFraction = cross.fraction
+                    onTrace?(f.t, String(format: "impact found (floor %.0f, peak rot %.1f, idx %d)",
+                                         floor, swingPeakRotation, candidate))
+                    delegate?.detectorDidDetectImpact(wasArmed: wasArmedForThisSwing)
+                }
+                // else a sharper event is imminent — keep looking.
             }
+            // No lookahead yet: do nothing this tick and re-test next tick, by
+            // which point more tail has arrived. The swing timeout still guards
+            // against a candidate that never gets its lookahead.
         }
         if let impact = pendingImpact {
             // Strike confirmed; the only thing left is collecting the trace
@@ -366,7 +449,7 @@ final class RoutineDetector {
 
         // The whole self-labeling loop: the ball is the ground truth.
         template.learn(sig, struck: struck)
-        template.save()
+        template.save(for: discipline)
         if struck { sessionOpened = true }
 
         // Both verdicts carry the two numbers the verdict itself rode on.
@@ -388,8 +471,10 @@ final class RoutineDetector {
         let swing: Swing
         if let impact {
             var m = SwingAnalyzer.metrics(frames: buffer,
-                                          takeawayIdx: takeaway, impactIdx: impact)
-            m.discipline = discipline
+                                          takeawayIdx: takeaway, impactIdx: impact,
+                                          impactFraction: pendingImpactFraction,
+                                          discipline: discipline,
+                                          stillRotation: Self.stillnessRotation)
             m.peakJerk = observedPeakJerk
             swing = Swing(struck: true, routine: sig, armConfidence: confidence,
                           metrics: m,
@@ -413,6 +498,7 @@ final class RoutineDetector {
         state = .recovering
         takeawayIdx = nil
         pendingImpact = nil
+        pendingImpactFraction = 1.0
         recoverStart = nil
 
         onTrace?(buffer.last?.t ?? 0,

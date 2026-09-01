@@ -552,3 +552,79 @@ The missing lead-in is now padded with the first available sample: the
 impact sits where every other trace puts it, and the short lead-in reads as
 flat, which is what stillness looks like anyway. Pinned for length and
 impact position.
+
+## 43. The field data was pitching, and five numbers were tuned on it
+
+The 367-record export that DECISIONS 35, 36, 39 and 40 all drew on was pitching
+and chipping inside ~15 yards, recorded with the watch left in Full-swing mode.
+It describes the short game, not the full swing. Commit 1e087ee restored
+`referenceRotation` to 22 but left the rest of that lineage in place. Corrected
+here:
+
+- `referenceRotation` = 22 for the full swing (a committed full swing peaks
+  there; the 14 rad/s "measured" figure was a committed *pitch*, which is what
+  22 × 0.28 predicts the pitching row should see — so that data calibrates
+  pitching, and pitching's row is where it belongs).
+- The sensitivity dial (0.35 / 0.45 / 0.55) is now marked PROVISIONAL in
+  `Models.swift` rather than "measured". Its 73/62/49% operating points are a
+  wedge routine's, not a full swing's. Re-derive from a genuine full-swing
+  diagnostic capture before trusting them.
+- The scorer's held-out fixtures in the harness are pitch signatures; the
+  "usable gap" check stands, but as a pitching claim.
+- The top-of-backswing "34% CV" and the impact self-normalisation ratios were
+  fitted to make the 275/92 struck-vs-rehearsal counts move on pitching data.
+  They are not wrong, but they are not full-swing-calibrated.
+
+No genuine full-swing capture exists yet. The replay tool will settle all five
+the moment one lands.
+
+## 44. Full-app audit sweep — the numbers, the transitions, the pipeline
+
+A line-by-line read of every file produced a findings doc; the fixes shipped in
+this commit, each pinned in the harness (now 108 checks, run in CI):
+
+**Numbers that were wrong, now fixed.**
+- *Sequencing was fiction.* `pelvisLeadMs()` reported hip-peak-to-impact alone —
+  positive on every swing ever made — and fed it to the score (20%) and the
+  "hips fired before your hands" coaching line. It now compares the hips' lead
+  (phone) against the hands' lead (`wristPeakLeadMs`, measured on the watch),
+  so a hands-first swing reads negative and the coaching is true.
+- *Timing ran on the wrong clock.* Backswing/downswing were index/100 off a
+  late trigger. They now use frame timestamps and a true takeaway walked back
+  to the last still frame, removing a systematic low bias in every tempo ratio.
+- *Impact never self-normalised live.* The "sharpest event in the swing" test
+  only held in the harness; live it locked the first crossing on a growing
+  buffer. It now waits for a short lookahead, skips the strike's own ring-down,
+  and takes the candidate only if nothing sharper follows — so an early
+  wrist-cock no longer steals the impact mark.
+- *Repeatability's tight bands beat the sampling floor.* Impact and top
+  crossings are now sub-sample interpolated.
+- *Smoothness wasn't discipline-normalised* while everything around it was; a
+  0.4 s putt scored structurally smoother than a 1.1 s swing. Duration is now
+  relative to the discipline's nominal window.
+- *Plateau detection used a purely relative stillness threshold,* so every
+  fidget produced plateaus; it now has an absolute ceiling too.
+
+**Transitions that didn't connect, now fixed.**
+- *The impact burst replayed turf.* It fired at swing completion plus transfer
+  latency and sliced the newest ring samples — ~half a second after the strike.
+  A new `detectorDidDetectImpact` fires the instant the strike is confirmed,
+  stamped, and the phone backs the ring read pointer to the true strike.
+- *Sequencing only covered armed swings.* Every struck swing now snapshots it.
+- *The iPad showed demo data as a live session;* it now stays honest until real
+  data arrives.
+- *The learned template died with the watch* and wasn't per-discipline; it is
+  now keyed by discipline and backed up to the phone at session end.
+- *Replay couldn't reproduce arming* (built a detector from empty defaults);
+  captures now carry the template and config and replay installs them.
+- *The dead `AudioRoute` setting* — stored, synced, ignored — was removed.
+
+**Pipeline — the cross-project certificate war, ended.**
+The mint-on-every-run signing model is gone. Groove now signs with the same
+persistent distribution certificate parking-sentry uses (p12 in
+credentials_registry row 451), manual signing, two App Store profiles minted
+once (Groove CI Phone / Groove CI Watch). Deleted: the prune step, both
+`GROOVE_OWNED_CERT_IDS` and `PROTECTED_CERT_IDS` variables, and the race where a
+cert another project minted mid-run got recorded as Groove's and revoked. This
+repo can no longer touch another project's signing. The harness runs in CI as a
+Build check gate, and TestFlight is gated on Build check succeeding.

@@ -36,6 +36,20 @@ print("capture: \(frames.count) frames, \(String(format: "%.1f", (frames.last?.t
 print("live events recorded on the wrist: \(watch.events.count)")
 
 let det = RoutineDetector()
+// Reproduce the wrist's actual arming, not this machine's empty defaults: if
+// the capture carried the template and config it was recorded with, install
+// them. Struck/rehearsal verdicts never needed this; arm/takeaway/duck did,
+// so before this every replay under-reported arming and looked like a
+// regression that wasn't one.
+det.discipline = discipline
+if let tj = watch.templateJSON,
+   let t = try? JSONDecoder().decode(RoutineTemplate.self, from: tj) {
+    det.installTemplate(t)
+}
+if let cj = watch.configJSON,
+   let c = try? JSONDecoder().decode(Config.self, from: cj) {
+    det.config = c
+}
 let rec = ReplayRecorder()
 det.delegate = rec
 det.discipline = discipline

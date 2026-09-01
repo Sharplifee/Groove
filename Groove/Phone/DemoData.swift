@@ -101,7 +101,11 @@ enum DemoData {
         // is occasional rather than typical.
         m.clipped = discipline.canSaturateSensor && rand(7) > 0.72
         if hasPelvis && discipline.reportsSequencing {
+            // Demo carries the finished sequencing number directly (hips lead
+            // hands, ms). Kept believable: mostly positive with the odd swing
+            // where the hands jumped first.
             m.pelvisLeadMs = 28 + (rand(8) - 0.35) * 70
+            m.wristPeakLeadMs = 220 + rand(9) * 40   // realistic hands-to-impact
         }
 
         return Swing(date: date, sessionID: sessionID, struck: true,

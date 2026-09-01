@@ -35,6 +35,13 @@ struct CaptureStream: Codable, Equatable {
     var version: Int = CaptureColumns.version
     var frames: [[Double]] = []
     var events: [CaptureEventRow] = []
+    /// The template and config the wrist was actually running when this was
+    /// captured. Without them a replay builds a detector from the replaying
+    /// machine's empty UserDefaults, so arm/disarm/takeaway decisions never
+    /// reproduce and only struck/rehearsal verdicts (which don't need the
+    /// template) match. Optional so older captures still decode.
+    var templateJSON: Data?
+    var configJSON: Data?
 }
 
 /// The file the player actually exports: both devices, one JSON.
@@ -57,6 +64,8 @@ final class CaptureRecorder {
         stream = CaptureStream(device: device,
                                discipline: discipline.rawValue,
                                startedAt: Date())
+        stream.templateJSON = try? JSONEncoder().encode(RoutineTemplate.load(for: discipline))
+        stream.configJSON = try? JSONEncoder().encode(Config.load())
     }
 
     func append(_ f: MotionFrame) {

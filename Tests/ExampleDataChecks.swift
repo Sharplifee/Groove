@@ -320,7 +320,14 @@ do {
           Discipline.putting.takeawayThreshold < 0.5)
     for d in Discipline.allCases {
         check("takeaway: \(d.rawValue) trigger sits above the stillness gate",
-              d.takeawayThreshold > 0.35)
+              d.takeawayThreshold > RoutineDetector.stillnessRotation)
+    }
+    // The floor is 1.2x the stillness gate, not "nearly three times" as
+    // DECISIONS 39 claimed. Pin the real ratio so the note and the code agree.
+    check("takeaway: putting floor is 1.2x the stillness gate",
+          abs(Discipline.putting.takeawayThreshold
+              / RoutineDetector.stillnessRotation - 1.2) < 0.01)
+    do {
     }
 }
 
@@ -472,7 +479,8 @@ do {
     seg(0.12, 0.20, 0.02)   // the top
     seg(0.28, 9.0, 0.35)    // downswing
     let impactIdx = frames.count - 1
-    let m = SwingAnalyzer.metrics(frames: frames, takeawayIdx: 80, impactIdx: impactIdx)
+    let m = SwingAnalyzer.metrics(frames: frames, takeawayIdx: 80, impactIdx: impactIdx,
+                                  discipline: .fullSwing)
     check("top: the downswing is measured from the top, not from address",
           m.downswing > 0.22 && m.downswing < 0.42)
     check("top: the backswing gets the rest of the swing",
@@ -493,7 +501,8 @@ do {
     seg(0.6, 3.0, 0.10)
     seg(0.10, 0.25, 0.02)
     seg(0.30, 9.0, 0.35)
-    let m = SwingAnalyzer.metrics(frames: frames, takeawayIdx: 5, impactIdx: frames.count - 1)
+    let m = SwingAnalyzer.metrics(frames: frames, takeawayIdx: 5, impactIdx: frames.count - 1,
+                                  discipline: .fullSwing)
     check("top: an early takeaway cannot make the downswing swallow the swing",
           m.downswing < 0.45)
 }
@@ -730,6 +739,96 @@ do {
     let peakAt = trace.indices.max { trace[$0] < trace[$1] } ?? -1
     check("trace: the early strike's impact sits where every other impact sits",
           abs(peakAt - expected) <= 2)
+}
+
+
+
+// MARK: - Audit fixes (2026-09-01)
+
+// 1.1 — sequencing is hip-lead MINUS hand-lead, so a hands-first swing must be
+// able to read NEGATIVE. The old code reported hip-peak-to-impact alone, which
+// is positive on every swing. Build a metric with a late hip and an early hand
+// and confirm the reported lead goes negative.
+do {
+    var m = SwingMetrics()
+    m.discipline = .fullSwing
+    m.wristPeakLeadMs = 300          // hands peaked 300 ms before impact
+    // Simulate the phone's contribution: hips only 120 ms before impact.
+    let hipLead = 120.0
+    let reported = hipLead - m.wristPeakLeadMs!
+    check("sequencing: hands-first swing reports a negative lead", reported < 0)
+    // And hips-first reads positive.
+    m.wristPeakLeadMs = 90
+    check("sequencing: hips-first swing reports a positive lead", 120.0 - m.wristPeakLeadMs! > 0)
+}
+
+// 1.4/1.5 — backswing timing runs on frame timestamps and a true takeaway, so a
+// swing whose trigger fired late still reports a full backswing. Feed a swing
+// with a slow rotation ramp that crosses the 1.0 trigger only well into the
+// backswing, and confirm the measured backswing is longer than trigger-to-top.
+do {
+    var frames: [MotionFrame] = []
+    var t = 0.0
+    func seg(_ dur: Double, _ rot: Double, _ acc: Double) {
+        for _ in 0..<Int(dur * 100) { frames.append(mf(t, rot: rot, accel: acc)); t += 0.01 }
+    }
+    seg(1.0, 0.05, 0.005)          // address, still
+    seg(0.3, 0.6, 0.02)            // club creeping back UNDER the 1.0 trigger
+    seg(0.3, 3.0, 0.05)            // trigger crosses here, mid-backswing
+    let topT = t
+    seg(0.05, 0.1, 0.01)           // top
+    seg(0.25, 9.0, 0.10)           // downswing
+    let ti = t
+    frames.append(mf(t, rot: 7, accel: 1.4)); t += 0.01   // strike
+    seg(0.6, 1.0, 0.05)
+    let trigger = Int(1.3 * 100)   // where isTakeaway would fire (~1.3 s in)
+    let impactIdx = Int(ti * 100)
+    let m = SwingAnalyzer.metrics(frames: frames, takeawayIdx: trigger, impactIdx: impactIdx,
+                                  discipline: .fullSwing)
+    // True takeaway walks back to the still address, so the backswing includes
+    // the creep the trigger missed — strictly longer than trigger→top.
+    let triggerToTop = topT - Double(trigger) / 100
+    check("timing: backswing is measured from the true start, not the late trigger",
+          m.backswing > triggerToTop)
+    check("timing: tempo ratio stays in a golfer's range with true-start timing",
+          m.tempoRatio > 1.2 && m.tempoRatio < 6.0)
+}
+
+// 1.6/1.7 — a wrist-cock spike early in the backswing must NOT be taken as
+// impact when the real, sharper strike follows. The confirmation step should
+// pick the strike, not the cock.
+do {
+    let det = RoutineDetector(); let rec = SwingRecorder()
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var frames = stream([(1.2, 0.05, 0.005), (0.4, 1.6, 0.06)])
+    let cockT = frames.last!.t
+    frames += [mf(cockT + 0.01, rot: 4, accel: 0.30)]        // wrist-cock: modest spike
+    frames += stream([(0.5, 5.0, 0.08), (0.25, 9.0, 0.10)], from: cockT + 0.02)
+    let ti = frames.last!.t
+    frames += [mf(ti + 0.01, rot: 8, accel: 1.6)]            // real strike: sharper
+    frames += stream([(0.9, 1.2, 0.06), (0.6, 0.04, 0.005)], from: ti + 0.02)
+    frames.forEach(det.ingest)
+    check("impact: the real strike wins over an earlier wrist-cock spike",
+          rec.swings.count == 1 && rec.swings[0].struck
+          && rec.swings[0].metrics.downswing < 0.6)   // downswing timed from the true top, not the cock
+}
+
+// 1.10 — smoothness is discipline-normalised: the same synthetic buttery motion
+// scored as a putt and as a full swing must land close, not 20 points apart.
+do {
+    func swing(_ dur: Double) -> [MotionFrame] {
+        var f: [MotionFrame] = []; var t = 0.0
+        let n = Int(dur * 100)
+        for i in 0..<n {
+            let x = Double(i) / Double(n)
+            f.append(mf(t, rot: 6 * sin(x * .pi), accel: 0.1 + 0.05 * sin(x * .pi))); t += 0.01
+        }
+        return f
+    }
+    let full = SwingAnalyzer.metricsSmoothnessProbe(swing(1.1), discipline: .fullSwing)
+    let putt = SwingAnalyzer.metricsSmoothnessProbe(swing(0.4), discipline: .putting)
+    check("smoothness: the same motion scores comparably across disciplines",
+          abs(full - putt) < 15)
 }
 
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")

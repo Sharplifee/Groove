@@ -819,7 +819,7 @@ struct PairedDeviceView: View {
             VStack(spacing: Space.xl) {
                 header
 
-                if c.isSessionLive || !c.summary.struckSwings.isEmpty {
+                if !c.isShowingExample && (c.isSessionLive || !c.summary.struckSwings.isEmpty) {
                     HStack(spacing: Space.l) {
                         StatTile("swings", "\(c.summary.struckSwings.count)")
                         StatTile("repeatability",
@@ -845,7 +845,9 @@ struct PairedDeviceView: View {
                 } else {
                     EmptyState(icon: Icon.paired,
                                title: "Waiting for your phone",
-                               message: "Start a session from your watch. This screen follows along.")
+                               message: c.isShowingExample
+                                 ? "This is a sample on the phone. Start a real session from your watch and this screen follows along."
+                                 : "Start a session from your watch. This screen follows along.")
                 }
 
                 Spacer()
