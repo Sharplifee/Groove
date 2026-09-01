@@ -80,10 +80,11 @@ jobs:
       # definition — the keys are gone — so each run clears the deck first and
       # then mints exactly what it needs. If a local Xcode ever signs on this
       # team it simply re-creates its certificate on next build, same as CI.
-      - name: Prune orphaned signing certificates
+      - name: Prune only the certificates Groove itself created
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          GROOVE_OWNED_CERT_IDS: ${{ vars.GROOVE_OWNED_CERT_IDS }}
           PROTECTED_CERT_IDS: ${{ vars.PROTECTED_CERT_IDS }}
         run: |
           pip3 install --quiet --break-system-packages pyjwt cryptography
@@ -102,34 +103,29 @@ jobs:
                   headers=H, method=method)
               with urllib.request.urlopen(r) as resp:
                   return json.load(resp) if method == "GET" else None
-          # PROTECTED_CERT_IDS holds certificates that belong to OTHER apps and
-          # whose private keys are retained in those repos' secrets. They are
-          # NOT orphans and must survive this prune. Before this guard existed
-          # the filter matched every certificate on the team, so each push to
-          # this repo silently revoked the signing certs of squad-comms,
-          # momentum, scribbly and nearfield — every other iOS pipeline on
-          # team XF783932R2 broke, repeatedly, for reasons that looked like
-          # they originated in those repos.
-          protected = {i.strip() for i in
-                       os.environ.get("PROTECTED_CERT_IDS", "").split(",")
-                       if i.strip()}
+          # OWNERSHIP MODEL (replaces the old allowlist, which revoked every
+          # cert on team XF783932R2 that someone forgot to list — it killed
+          # scribbly, squad-comms, momentum and nearfield repeatedly):
+          #   * GROOVE_OWNED_CERT_IDS = certificates minted BY THIS WORKFLOW on
+          #     previous runs. Their private keys died with those runners, so
+          #     they are true orphans and are the ONLY things ever revoked here.
+          #   * Everything else on the account is untouched, whether or not
+          #     anyone remembered to protect it.
+          #   * PROTECTED_CERT_IDS is kept as a belt-and-braces veto.
+          owned = {i.strip() for i in os.environ.get("GROOVE_OWNED_CERT_IDS", "").split(",") if i.strip()}
+          protected = {i.strip() for i in os.environ.get("PROTECTED_CERT_IDS", "").split(",") if i.strip()}
           certs = call("GET", "/v1/certificates?limit=200")["data"]
-          doomed = [c for c in certs
-                    if c["attributes"]["certificateType"]
-                    in ("DEVELOPMENT", "DISTRIBUTION", "IOS_DEVELOPMENT",
-                        "IOS_DISTRIBUTION")
-                    and c["id"] not in protected]
-          for c in certs:
-              if c["id"] in protected:
-                  print("PROTECTED, left alone:", c["id"],
-                        c["attributes"]["certificateType"],
-                        c["attributes"].get("displayName", ""))
+          present = {c["id"] for c in certs}
+          doomed = [c for c in certs if c["id"] in owned and c["id"] not in protected]
           for c in doomed:
               call("DELETE", "/v1/certificates/" + c["id"])
-              print("revoked", c["attributes"]["certificateType"],
+              print("revoked (Groove-owned orphan)", c["attributes"]["certificateType"],
                     c["attributes"].get("displayName", ""), c["id"])
-          print(f"{len(doomed)} orphaned certificate(s) cleared, "
-                f"{len(protected)} protected")
+          print(f"{len(doomed)} Groove-owned orphan(s) cleared; "
+                f"{len(present) - len(doomed)} other certificate(s) on the team left alone")
+          # Snapshot what exists NOW so the post-build step can tell which
+          # certificate(s) this run minted.
+          json.dump(sorted(present - {c["id"] for c in doomed}), open("certs_before.json", "w"))
           PRUNE
 
       # No -sdk here. It would override the SDK for every target in the scheme
@@ -154,6 +150,40 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Automatic \
             2>&1 | tee archive.log
+
+      - name: Record the certificate(s) this run minted as Groove-owned
+        if: always()
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          python3 - <<'OWN'
+          import json, os, time, urllib.request, jwt
+          kid, iss = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
+          key = open(os.path.expanduser(f"~/private_keys/AuthKey_{kid}.p8")).read()
+          tok = jwt.encode({"iss": iss, "iat": int(time.time()), "exp": int(time.time()) + 1200,
+                            "aud": "appstoreconnect-v1"}, key, algorithm="ES256", headers={"kid": kid})
+          r = urllib.request.Request("https://api.appstoreconnect.apple.com/v1/certificates?limit=200",
+                                     headers={"Authorization": "Bearer " + tok})
+          now = {c["id"] for c in json.load(urllib.request.urlopen(r))["data"]}
+          try: before = set(json.load(open("certs_before.json")))
+          except Exception: before = set()
+          minted = sorted(now - before)
+          print("minted this run:", minted or "none")
+          if not minted: raise SystemExit(0)
+          repo = os.environ["GITHUB_REPOSITORY"]
+          gh = {"Authorization": "Bearer " + os.environ["GH_PAT"], "Accept": "application/vnd.github+json",
+                "Content-Type": "application/json"}
+          body = json.dumps({"name": "GROOVE_OWNED_CERT_IDS", "value": ",".join(minted)}).encode()
+          for method, url in (("PATCH", f"https://api.github.com/repos/{repo}/actions/variables/GROOVE_OWNED_CERT_IDS"),
+                              ("POST",  f"https://api.github.com/repos/{repo}/actions/variables")):
+              try:
+                  urllib.request.urlopen(urllib.request.Request(url, data=body, headers=gh, method=method))
+                  print("GROOVE_OWNED_CERT_IDS =", ",".join(minted)); break
+              except urllib.error.HTTPError as e:
+                  if method == "POST": print("could not record owned certs:", e.code, e.read()[:200])
+          OWN
 
       - name: Export IPA
         env:
