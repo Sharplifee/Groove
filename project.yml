@@ -15,7 +15,8 @@ settings:
     # behaviour the README says was hard-won.
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: XF783932R2
-    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: Apple Distribution
     MARKETING_VERSION: "1.1"
     CURRENT_PROJECT_VERSION: "2"
 
@@ -39,6 +40,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ENABLE_PREVIEWS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        PROVISIONING_PROFILE_SPECIFIER: Groove CI Phone
     dependencies:
       - target: Groove Watch App
         embed: true
@@ -64,3 +66,4 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
         ENABLE_PREVIEWS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        PROVISIONING_PROFILE_SPECIFIER: Groove CI Watch
