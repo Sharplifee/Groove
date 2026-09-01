@@ -708,5 +708,27 @@ do {
           && Sensitivity.eager.threshold > 0.25 && Sensitivity.strict.threshold < 0.65)
 }
 
+
+// MARK: - Early strikes keep their trace
+
+// A strike inside the first second of a session must still produce a
+// full-length, impact-aligned trace instead of dropping out of the overlay.
+do {
+    var frames = stream([(0.5, 0.05, 0.01), (0.3, 8.0, 0.30)])
+    let impactIdx = frames.count
+    frames += [mf(frames.last!.t + 0.01, rot: 6, accel: 1.4)]
+    frames += stream([(0.6, 1.0, 0.10)], from: frames.last!.t + 0.01)
+    let trace = SwingAnalyzer.normalizedTrace(frames: frames, impactIdx: impactIdx)
+    check("trace: an early strike still gets a full-length trace",
+          trace.count == SwingAnalyzer.traceLength)
+    // Impact lands at the same normalised position as any other trace.
+    let expected = Int(Double(SwingAnalyzer.traceLength)
+                       * Discipline.fullSwing.tracePre
+                       / (Discipline.fullSwing.tracePre + Discipline.fullSwing.tracePost))
+    let peakAt = trace.indices.max { trace[$0] < trace[$1] } ?? -1
+    check("trace: the early strike's impact sits where every other impact sits",
+          abs(peakAt - expected) <= 2)
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

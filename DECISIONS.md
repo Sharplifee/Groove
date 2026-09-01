@@ -542,3 +542,13 @@ narration frame by frame. Proven end to end on a synthetic bundle shaped
 exactly like the app's export. The moment a real range capture lands, the
 3:1 question gets answered against actual swings rather than resampled
 traces.
+
+## 42. Early strikes keep their trace
+
+A strike landing inside the first 1.1 s of the buffer returned an empty
+trace, so the swing silently dropped out of the overlay and the ensemble —
+typically the first ball of a session, exactly the one a player looks for.
+The missing lead-in is now padded with the first available sample: the
+impact sits where every other trace puts it, and the short lead-in reads as
+flat, which is what stillness looks like anyway. Pinned for length and
+impact position.

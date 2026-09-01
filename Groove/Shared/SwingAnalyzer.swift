@@ -320,8 +320,19 @@ enum SwingAnalyzer {
                                 discipline: Discipline = .fullSwing) -> [Double] {
         let pre = Int(discipline.tracePre * fs), post = Int(discipline.tracePost * fs)
         let lo = impactIdx - pre, hi = impactIdx + post
-        guard lo >= 0, hi < frames.count else { return [] }
-        let seg = frames[lo...hi].map(\.accelMagnitude)
+        guard hi < frames.count else { return [] }
+        // A strike early in the buffer used to return nothing at all, so the
+        // swing silently dropped out of the overlay and the ensemble. Pad the
+        // missing lead-in with the first available sample instead — the
+        // impact stays exactly where every other trace puts it, and a short
+        // lead-in reads as flat, which is what stillness looks like anyway.
+        var seg: [Double] = []
+        if lo < 0 {
+            seg = Array(repeating: frames[0].accelMagnitude, count: -lo)
+            seg += frames[0...hi].map(\.accelMagnitude)
+        } else {
+            seg = frames[lo...hi].map(\.accelMagnitude)
+        }
         return resample(seg, to: traceLength)
     }
 
