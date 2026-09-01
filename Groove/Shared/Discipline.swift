@@ -182,7 +182,7 @@ enum Discipline: String, Codable, CaseIterable, Identifiable, Sendable {
     /// around 14 rad/s at the wrist (p75), not the 22 this was first guessed
     /// at. Guessing high made every genuine swing look like a half effort and
     /// dropped the strike floor further than intended.
-    var referenceRotation: Double { 14.0 * motionScale }
+    var referenceRotation: Double { 22.0 * motionScale }
 
     /// Takeaway trigger, scaled to the discipline. The old fixed 1.4 rad/s was
     /// tuned on the full swing; a putting stroke or a soft pitch never crosses
