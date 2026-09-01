@@ -52,7 +52,35 @@ jobs:
           xcodegen generate
 
       - name: Set build number
-        run: agvtool new-version -all ${{ github.run_number }}
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          pip3 install --quiet --break-system-packages pyjwt cryptography
+          mkdir -p ~/private_keys
+          echo "$ASC_KEY_P8" | base64 --decode > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          NEXT=$(python3 - <<'PYNUM'
+          import json, os, time, urllib.request, jwt
+          kid, iss = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
+          key = open(os.path.expanduser(f"~/private_keys/AuthKey_{kid}.p8")).read()
+          tok = jwt.encode({"iss": iss, "iat": int(time.time()), "exp": int(time.time())+900,
+                            "aud": "appstoreconnect-v1"}, key, algorithm="ES256", headers={"kid": kid})
+          req = urllib.request.Request(
+              "https://api.appstoreconnect.apple.com/v1/builds?filter[app]=6801063220&sort=-version&limit=200",
+              headers={"Authorization": "Bearer " + tok})
+          data = json.loads(urllib.request.urlopen(req).read()).get("data", [])
+          highest = 0
+          for b in data:
+              try: highest = max(highest, int(b["attributes"]["version"]))
+              except (ValueError, TypeError): pass
+          # Never below the CI run number either, so numbers only ever climb.
+          print(max(highest, int(os.environ.get("GITHUB_RUN_NUMBER", "0"))) + 1)
+          PYNUM
+          )
+          echo "Next build number: $NEXT"
+          echo "BUILD_NUMBER=$NEXT" >> "$GITHUB_ENV"
+          agvtool new-version -all "$NEXT"
 
       - name: Import signing certificate
         env:
@@ -156,12 +184,24 @@ jobs:
                       raw = resp.read(); return json.loads(raw) if raw else None
               except urllib.error.HTTPError as e:
                   print(f"   !! {m} {p} -> {e.code}: {e.read().decode()[:300]}"); return None
-          APP, VERSION = "6801063220", os.environ.get("GITHUB_RUN_NUMBER","")
+          from datetime import datetime, timezone
+          APP, VERSION = "6801063220", os.environ.get("BUILD_NUMBER","")
           target = None
           for _ in range(30):
               builds = call("GET", f"/v1/builds?filter[app]={APP}&sort=-version&limit=5")
               for b in (builds or {}).get("data", []):
-                  if b["attributes"]["version"] == VERSION: target = b; break
+                  if b["attributes"]["version"] != VERSION: continue
+                  # Guard against shipping a stale build that happens to share
+                  # this number: it must have landed just now, not hours ago.
+                  up = b["attributes"].get("uploadedDate","")
+                  try:
+                      age = (datetime.now(timezone.utc) - datetime.fromisoformat(up)).total_seconds()
+                  except Exception:
+                      age = 1e9
+                  if age > 1200:
+                      raise SystemExit(f"build {VERSION} exists but is {int(age)}s old — "
+                                       "this run's upload did not register (duplicate number?)")
+                  target = b; break
               if target and target["attributes"]["processingState"] == "VALID": break
               print("   waiting for build", VERSION,
                     target["attributes"]["processingState"] if target else "not visible")
