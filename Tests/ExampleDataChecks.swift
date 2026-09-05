@@ -831,5 +831,27 @@ do {
           abs(full - putt) < 15)
 }
 
+
+// MARK: - Pitching reference eases the floor for a soft pitch
+
+// The bug in the field: pitching reference was 22*0.28 = 6.2 rad/s, but real
+// pitches peak near 13.5, so peakRotation/reference always exceeded 1 and the
+// floor never dropped — soft contact went unheard. With the measured
+// reference, a gentle pitch (well under committed) must ease the floor below
+// the committed floor, not sit at or above it.
+do {
+    let committed = 13.5, soft = 7.0
+    let ref = Discipline.pitching.referenceRotation
+    let base = Discipline.pitching.wristImpactThreshold
+    let floorSoft = SwingAnalyzer.effectiveImpactThreshold(
+        base: base, peakRotation: soft, referenceRotation: ref)
+    let floorCommitted = SwingAnalyzer.effectiveImpactThreshold(
+        base: base, peakRotation: committed, referenceRotation: ref)
+    check("pitch: a soft pitch eases the floor below a committed one",
+          floorSoft < floorCommitted)
+    check("pitch: the committed floor is not inflated past the base",
+          floorCommitted <= base + 0.001)
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

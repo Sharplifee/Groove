@@ -185,7 +185,21 @@ enum Discipline: String, Codable, CaseIterable, Identifiable, Sendable {
     /// which is exactly what 22 × 0.28 ≈ 6 predicts a pitch should be scaled
     /// against — so the pitching row below is the one that data actually
     /// calibrates. Restored to 22 in 1e087ee.
-    var referenceRotation: Double { 22.0 * motionScale }
+    /// Wrist rotation a committed strike peaks at, per discipline — the scale
+    /// the impact floor divides by, so a softer-than-committed strike lowers
+    /// the floor and still registers. These are MEASURED, not scaled from one
+    /// full-swing guess: a pitching session logged in the field peaked near
+    /// 13.5 rad/s at the wrist (p75 of 92 strikes), while 22*0.28 = 6.2 told
+    /// the engine every pitch was a double-effort swing, so it never eased the
+    /// floor for the soft ones — the direct cause of missed short-game contact.
+    /// Full swing and the untested disciplines stay on the 22*scale line until
+    /// real data moves them; pitching is pinned to what was actually recorded.
+    var referenceRotation: Double {
+        switch self {
+        case .pitching: return 13.5
+        default:        return 22.0 * motionScale
+        }
+    }
 
     /// Takeaway trigger, scaled to the discipline. The old fixed 1.4 rad/s was
     /// tuned on the full swing; a putting stroke or a soft pitch never crosses

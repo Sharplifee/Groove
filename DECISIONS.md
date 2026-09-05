@@ -628,3 +628,17 @@ once (Groove CI Phone / Groove CI Watch). Deleted: the prune step, both
 cert another project minted mid-run got recorded as Groove's and revoked. This
 repo can no longer touch another project's signing. The harness runs in CI as a
 Build check gate, and TestFlight is gated on Build check succeeding.
+
+## 45. Pitching reference measured, not scaled — the direct cause of missed soft contact
+
+The field session was pitching at 10-15 yds logged in full-swing mode, which
+reframes the whole export. The pitching intensity reference was 22 * 0.28 =
+6.2 rad/s, but real pitches in that session peaked near 13.5 (p75 of 92
+strikes). Because the impact floor divides by this reference to ease itself
+for softer strikes, a reference set below the actual swing meant every pitch
+read as a double-effort swing and the floor never dropped — so the soft ones
+went unheard. That is the mechanism behind the 3:1 "practice" ratio, on top
+of the mode mismatch. Pitching reference is now pinned to the measured 13.5;
+full swing and the still-untested disciplines stay on the 22*scale line until
+their own data moves them. Pinned: a soft pitch must ease the floor below a
+committed pitch, and the committed floor must not inflate past the base.
