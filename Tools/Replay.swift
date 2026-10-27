@@ -13,11 +13,15 @@ import Foundation
 final class ReplayRecorder: RoutineDetectorDelegate {
     var swings: [(t: TimeInterval, swing: Swing)] = []
     var lastT: TimeInterval = 0
-    func detectorDidArm(confidence: Double) {}
+    var discards = 0
+    func detectorDidArm(confidence: Double, routine: Bool) {}
     func detectorDidDisarm() {}
     func detectorDidFireTakeaway(confidence: Double) {}
     func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) {
         swings.append((lastT, swing))
+    }
+    func detectorDidDiscardMotion(reason: String, wasArmed: Bool) {
+        if reason != "early restore" { discards += 1 }
     }
 }
 
@@ -58,23 +62,27 @@ var narration: [(TimeInterval, String)] = []
 det.onTrace = { t, label in narration.append((t, label)) }
 for f in frames { rec.lastT = f.t; det.ingest(f) }
 
-let struck = rec.swings.filter { $0.swing.struck }
-let practice = rec.swings.filter { !$0.swing.struck }
-print("\nREPLAY VERDICTS: \(struck.count) struck, \(practice.count) practice swings")
+let struck = rec.swings.filter { $0.swing.resolvedKind == .strike }
+let practice = rec.swings.filter { $0.swing.resolvedKind == .practice }
+let waggles = rec.swings.filter { $0.swing.resolvedKind == .waggle }
+print("\nREPLAY VERDICTS: \(struck.count) struck, \(practice.count) practice swings, \(waggles.count) waggles, \(rec.discards) motions ignored")
 for (t, s) in rec.swings {
     let m = s.metrics
-    if s.struck {
-        print(String(format: "  %7.2fs  STRUCK   tempo %.2f  back %.2fs  down %.2fs  peak %.1f rad/s",
-                     t, m.tempoRatio, m.backswing, m.downswing, m.peakRotation))
-    } else {
-        print(String(format: "  %7.2fs  practice peak %.1f rad/s  jerk %.0f",
-                     t, m.peakRotation, m.peakJerk ?? 0))
+    switch s.resolvedKind {
+    case .strike:
+        print(String(format: "  %7.2fs  STRUCK   %-5@ tempo %.2f  back %.2fs  down %.2fs  peak %.1f rad/s  score %.2f",
+                     t, m.effortLabel?.label ?? "-", m.tempoRatio, m.backswing, m.downswing, m.peakRotation, m.strikeScore ?? 0))
+    case .practice:
+        print(String(format: "  %7.2fs  practice %-5@ tempo %.2f  peak %.1f rad/s  jerk %.0f  score %.2f",
+                     t, m.effortLabel?.label ?? "-", m.tempoRatio, m.peakRotation, m.peakJerk ?? 0, m.strikeScore ?? 0))
+    case .waggle:
+        print(String(format: "  %7.2fs  waggle   peak %.1f rad/s  %.2fs", t, m.peakRotation, m.duration ?? 0))
     }
 }
 
 // Side-by-side with what the wrist decided live.
 let liveStruck = watch.events.filter { $0.label.contains("STRUCK") }.count
-let liveReh = watch.events.filter { $0.label.contains("rehearsal") && $0.label.contains("complete") }.count
+let liveReh = watch.events.filter { ($0.label.contains("rehearsal") || $0.label.contains("— practice")) && $0.label.contains("complete") }.count
 print("\nLIVE ON THE WRIST: \(liveStruck) struck, \(liveReh) practice swings")
 if liveStruck != struck.count || liveReh != practice.count {
     print("DISAGREEMENT — the engine now reads this session differently than the build that recorded it.")

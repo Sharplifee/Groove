@@ -214,6 +214,40 @@ enum Discipline: String, Codable, CaseIterable, Identifiable, Sendable {
     /// swing are judged on the same scale (DECISIONS 43).
     var nominalSwingDuration: TimeInterval { tracePre }
 
+    // MARK: Swing shape (2026-10-27)
+
+    /// Peak wrist rotation below which a motion is not a swing at all, however
+    /// long it lasted. 22% of a committed swing: a one-handed feel swing or a
+    /// lazy half seven still clears it, a waggle, a re-grip or a club being
+    /// lifted off the turf does not.
+    var swingPeakFloor: Double { referenceRotation * 0.22 }
+
+    /// Rotation under which a motion episode is considered to have ended, held
+    /// for `RoutineDetector.episodeEndHold`. 60% of the takeaway trigger and
+    /// never under the stillness gate, so the pause at the top of a backswing
+    /// (which on the wrist never gets this quiet) cannot split a swing in two.
+    var episodeEndThreshold: Double { max(RoutineDetector.stillnessRotation, takeawayThreshold * 0.6) }
+
+    /// Shortest takeaway-to-finish span that can be a swing. A putt is a
+    /// third of a second end to end; a full swing is never under half a second.
+    var minSwingDuration: TimeInterval {
+        switch self {
+        case .fullSwing: return 0.5
+        case .chipping:  return 0.4
+        case .pitching:  return 0.35
+        case .putting:   return 0.3
+        }
+    }
+
+    /// Longest takeaway-to-finish span that can be a swing. Beyond this the
+    /// motion is a walk, a rake, or the player doing something else entirely.
+    var maxSwingDuration: TimeInterval { 3.5 }
+
+    /// Where the impact search starts after takeaway. The takeaway spike and
+    /// any wrist-cock live here; no strike can — even a putt's backstroke is
+    /// longer than this.
+    var impactSearchDelay: TimeInterval { self == .putting ? 0.2 : 0.25 }
+
     /// Whether dropping the music is worth doing.
     ///
     /// The duck exists to expose the strike. An iron has a compression note that

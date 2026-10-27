@@ -163,6 +163,9 @@ final class PhoneController: NSObject, ObservableObject {
     func finishCalibration(accepted: Bool) {
         config.hasCalibrated = accepted
         config.hasOnboarded = true
+        // Teaching it and accepting the result means the player wants the
+        // routine model used; otherwise the default every-swing duck stands.
+        if accepted { config.duckMode = .routineOnly }
     }
 
     // MARK: Session

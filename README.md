@@ -99,20 +99,34 @@ UIs say so, and `phoneReady` warns on the wrist.
 
 ## How it works
 
-**Arming, not predicting.** A real pre-shot routine is a *sequence* of stable
-holds with sharp edges between them — settle, set, address. A loose rehearsal
-drifts continuously. `SwingAnalyzer.plateaus` segments the pre-swing window into
-those holds and `RoutineSignature` reduces them to five features. The detector
-only fires the duck from the armed state.
+**Motions, then kinds.** The wrist stream is cut into episodes — takeaway to
+quiet — and nothing is decided until an episode closes. Then it is filed as a
+**strike** (impact transient confirmed), a **practice swing** (swing-shaped,
+no ball), a **waggle** (small, from address, back to still), or **discarded**
+(walking, raking, teeing up — counted, never logged, never taught). Practice
+swings carry full metrics timed on their own speed peak, so the app can say
+how your tempo over the ball compares with your tempo in rehearsal.
+
+**Three duck modes.** *Every swing* (default): any takeaway from a settled
+address drops the music, decided a quarter-second in so a waggle doesn't; no
+ball, restored within the swing. *Only real shots*: the learned pre-shot
+routine arms the duck — `SwingAnalyzer.plateaus` segments the setup into holds
+and `RoutineSignature` reduces them to five features; gated on teaching.
+*Never*: everything still recorded.
 
 **It labels itself.** A struck ball produces an impact transient; a rehearsal
 doesn't. Every swing self-labels after the fact, so `RoutineTemplate` trains
-continuously from the first session with nothing to tag. Cold start uses a
-hand-tuned prior until eight real reps exist.
+continuously from the first session with nothing to tag — but only from
+genuine swings taken from a settled address.
+
+**A strike is a spike, not a big number.** It must clear the discipline's
+scaled floor, stand three times above the jerk of the 120 ms before it, and
+give back half its jump within three samples. Saturating the accelerometer
+counts on its own. A hard clean downswing's own rise does none of this.
 
 **Correct fast, don't predict well.** A missed duck costs one strike; a false
-duck costs a second of dipped audio. So arm generously — and if no impact
-arrives within 3 s, restore immediately.
+duck costs a second of dipped audio. So duck generously, and restore the
+moment a motion shows it isn't a swing.
 
 **Session gate.** No ducking before the first struck ball of a session. You're
 warming up and your routine isn't consistent yet.
@@ -160,16 +174,19 @@ difference as inconsistency.
   existed.
 - **The audio session is torn down after every swing** (`scheduleDisarm`).
   Leaving it open pins Bluetooth earbuds to HFP for the whole session.
-- **`impactIndex` skips 250 ms after takeaway and takes the first threshold
-  crossing**, not the global max — otherwise the takeaway spike or a club drop
-  wins.
+- **The impact search skips the first 250 ms after takeaway**, and a candidate
+  is only confirmed after a 60 ms lookahead shows nothing sharper and the
+  sample is spike-shaped. A strike candidate is never taken in a motion with
+  three speed lobes behind it.
+- **Episodes close on quiet, not on a timer.** 300 ms under the end line, or a
+  second under the takeaway trigger; a struck swing closes once the follow-
+  through has shed half its speed. After any close no takeaway is tracked
+  until the wrist has dropped under the trigger once.
+- **Only swing-shaped motions are logged, and only swings from a settled
+  address teach the routine model.** Everything else is discarded and counted.
 - **Plateau segmentation runs at 10 Hz, not 100 Hz.** It's expensive and a hold
   lasts a second.
 - **The phone app must be running** for `sendMessage` to land. Both UIs say so.
-- **Never call `setActive(false)` outside `endSession()`.** Dropping the session
-  between swings suspends the app and kills everything downstream.
-- **Permissions are requested in onboarding, not discovered mid-round.**
-  `Permissions` owns the state and `blocker` names what's wrong in one line.
 - **Never call `setActive(false)` outside `endSession()`.** Dropping the session
   between swings suspends the app and kills everything downstream.
 - **Permissions are requested in onboarding, not discovered mid-round.**
@@ -186,11 +203,6 @@ difference as inconsistency.
   arrives — `transferUserInfo` can lag well past the 15 s pelvis buffer.
 - **Swings spool on the watch until the phone acks them**, and the phone dedupes
   by swing id because retries are expected.
-- **Never call `setActive(false)` outside `endSession()`.** Dropping the audio
-  session between swings suspends the app in the pocket and kills CoreMotion,
-  watch messages, and the duck along with it.
-- **Permissions are requested in onboarding, not discovered mid-round.**
-  `Permissions` owns the state and `blocker` names what's wrong in one line.
 
 ## Interaction rules — deliberate, don't undo them
 
@@ -199,8 +211,9 @@ difference as inconsistency.
   and `sessionEnd` from the watch.
 - **The Range tab is not a live dashboard.** It's what you see before you start
   and after you finish. Anything live belongs on the watch.
-- **Two haptics, both outside the swing.** One when it arms (you're still), one
-  after a swing is captured (you're done). Nothing fires at takeaway — buzzing a
+- **Two haptics, both outside the swing.** One when the routine model arms
+  (you're still — every-swing mode never buzzes at address), one after a swing
+  is captured (you're done). Nothing fires at takeaway — buzzing a
   player's wrist as their backswing begins is the worst possible moment.
 - **One consistency word.** It is always *Repeatability*, always a percentage,
   always lower-is-better. Never "variation", "CV", or "band width" in user copy.
@@ -212,11 +225,11 @@ difference as inconsistency.
 ## First run
 
 `OnboardingView` gates the app until it's done: what this is → the two questions
-that can't be inferred (handedness, watch wrist) → calibration. Calibration has
-the player take ~8 real shots and ~8 rehearsals with ducking off, then shows the
-actual separation found via `SeparationBar` before the detector is trusted. If
-separation is under 0.10 it says so plainly and recommends the strict setting
-rather than pretending it works.
+that can't be inferred (handedness, watch wrist) → an optional teaching pass.
+Out of the box the music drops on every swing from address. Teaching has the
+player take ~8 real shots and ~8 rehearsals, shows the separation found via
+`SeparationBar`, and — only if it is usable — switches the duck to "only real
+shots". If separation is under 0.10 it says so plainly rather than pretending.
 
 ## First session
 

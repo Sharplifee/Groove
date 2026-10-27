@@ -17,7 +17,7 @@ enum DemoData {
     /// impact spike, then decay through the follow-through.
     ///
     /// `looseness` widens the per-swing variation — 0 is a machine, 1 is a bad day.
-    static func trace(seed: Int, looseness: Double = 0.35) -> [Double] {
+    static func trace(seed: Int, looseness: Double = 0.35, struck: Bool = true) -> [Double] {
         let n = SwingAnalyzer.traceLength
         let impactAt = SwingAnalyzer.tracePre
             / (SwingAnalyzer.tracePre + SwingAnalyzer.tracePost)
@@ -37,12 +37,14 @@ enum DemoData {
                 let u = (t - 0.10) / (impactAt - 0.10)
                 v += 0.55 * pow(max(0, u), 1.6) * tempo
                 v -= 0.30 * exp(-pow((u - 0.52 + wobble) / 0.10, 2))
-                v += 2.90 * exp(-pow((u - 0.985) / 0.055, 2)) * gain
+                // A practice swing peaks where the ball would be and simply
+                // releases — no crack, no ring.
+                v += (struck ? 2.90 : 0.9) * exp(-pow((u - 0.985) / 0.055, 2)) * gain
             }
             if t > impactAt {
                 let d = t - impactAt
-                v += 3.60 * exp(-d * 46) * gain
-                v += 0.50 * exp(-d * 9) * sin(d * 90)
+                v += (struck ? 3.60 : 0.9) * exp(-d * 46) * gain
+                if struck { v += 0.50 * exp(-d * 9) * sin(d * 90) }
             }
             return max(0, v)
         }
@@ -61,16 +63,34 @@ enum DemoData {
         }
 
         guard struck else {
-            // A rehearsal: no strike, no trace, low routine confidence.
-            return Swing(date: date, sessionID: sessionID, struck: false,
+            // A practice swing: timed on its own speed peak, a touch slower
+            // than the real ones (the classic range tell), lower effort.
+            let span: Double = { switch discipline {
+                case .fullSwing: return 1.0
+                case .chipping:  return 0.72
+                case .pitching:  return 0.6
+                case .putting:   return 0.5 } }()
+            let down = 0.27 * span + (rand(2) - 0.5) * 0.05 * looseness
+            let back = down * (discipline.tempoReference + 0.18) + (rand(1) - 0.5) * 0.12 * looseness
+            var m = SwingMetrics()
+            m.discipline = discipline
+            m.backswing = back; m.downswing = down; m.tempoRatio = back / down
+            m.smoothness = 80 + rand(5) * 10
+            m.effort = 0.55 + rand(6) * 0.35
+            m.peakRotation = (m.effort ?? 0.7) * discipline.referenceRotation
+            m.duration = 1.3 * span + rand(7) * 0.3
+            m.peakAccel = 0.02 * m.peakRotation * m.peakRotation
+            m.startedFromAddress = true
+            m.strikeScore = 0.05 + rand(8) * 0.15
+            return Swing(date: date, sessionID: sessionID, struck: false, kind: .practice,
                          routine: RoutineSignature(plateauCount: 1,
                                                    meanDwell: 0.22,
                                                    totalSetupDuration: 0.9,
                                                    transitionSharpness: 0.08,
                                                    dwellVariance: 0.05),
                          armConfidence: 0.18 + rand(9) * 0.16,
-                         metrics: { var m = SwingMetrics(); m.discipline = discipline; return m }(),
-                         normalizedTrace: [])
+                         metrics: m,
+                         normalizedTrace: trace(seed: seed, looseness: looseness, struck: false))
         }
 
         // Stroke duration and ratio both move with the discipline. A putting
@@ -100,6 +120,14 @@ enum DemoData {
         // Long irons get there; a full wedge mostly doesn't, which is why this
         // is occasional rather than typical.
         m.clipped = discipline.canSaturateSensor && rand(7) > 0.72
+        // Mostly committed swings, with the odd three-quarter and a couple of
+        // easy ones — the effort mix on the Form tab needs something to show.
+        m.effort = rand(12) > 0.8 ? 0.5 + rand(13) * 0.25 : 0.84 + rand(13) * 0.2
+        m.peakRotation = (m.effort ?? 0.9) * discipline.referenceRotation
+        m.duration = 1.5 * span + rand(14) * 0.3
+        m.peakAccel = 0.02 * m.peakRotation * m.peakRotation
+        m.startedFromAddress = true
+        m.strikeScore = 0.8 + rand(15) * 0.2
         if hasPelvis && discipline.reportsSequencing {
             // Demo carries the finished sequencing number directly (hips lead
             // hands, ms). Kept believable: mostly positive with the odd swing
@@ -117,6 +145,22 @@ enum DemoData {
                      armConfidence: 0.72 + rand(11) * 0.22,
                      metrics: m,
                      normalizedTrace: trace(seed: seed, looseness: looseness))
+    }
+
+    /// A waggle at address: logged, counted, never scored.
+    static func waggle(seed: Int, sessionID: UUID, date: Date, discipline: Discipline) -> Swing {
+        var m = SwingMetrics()
+        m.discipline = discipline
+        m.peakRotation = 1.2 + Double(seed % 7) * 0.2
+        m.effort = m.peakRotation / discipline.referenceRotation
+        m.duration = 0.3 + Double(seed % 5) * 0.05
+        m.startedFromAddress = true
+        m.strikeScore = 0
+        return Swing(date: date, sessionID: sessionID, struck: false, kind: .waggle,
+                     routine: RoutineSignature(plateauCount: 1, meanDwell: 0.4,
+                                               totalSetupDuration: 0.4,
+                                               transitionSharpness: 0.02, dwellVariance: 0),
+                     armConfidence: 0, metrics: m, normalizedTrace: [])
     }
 
     /// A full history: several sessions, each with struck swings and the
@@ -165,7 +209,13 @@ enum DemoData {
                 for r in 0..<(i % 3 == 0 ? 2 : 1) {
                     out.append(swing(seed: seed, sessionID: id,
                                      date: at.addingTimeInterval(Double(r) * 6 - 20),
-                                     struck: false, discipline: discipline))
+                                     struck: false, looseness: fatigue, discipline: discipline))
+                    seed += 1
+                }
+                // And a waggle at address every few balls.
+                if i % 4 == 1 {
+                    out.append(waggle(seed: seed, sessionID: id,
+                                      date: at.addingTimeInterval(-3), discipline: discipline))
                     seed += 1
                 }
             }

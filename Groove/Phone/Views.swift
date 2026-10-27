@@ -126,9 +126,9 @@ struct TodayView: View {
                 }
             }
 
-            if !c.config.hasCalibrated {
+            if c.config.duckMode == .routineOnly && !c.config.hasCalibrated {
                 Card("teach it your swing") {
-                    Note("Until it has watched you hit a few balls, it can't tell a real swing from a practice one, so your music won't drop.")
+                    Note("You've asked it to leave practice swings alone. Until it has watched you hit a few balls it can't tell them apart, so your music won't drop yet.")
                     Button("Teach it now") { c.beginCalibration() }
                         .buttonStyle(PrimaryButton())
                 }
@@ -219,8 +219,8 @@ struct TodayView: View {
                 Note("A few more \(s.discipline.countWord) and the score starts running.")
             }
 
-            if s.rehearsals.count > 0 {
-                Text("\(s.rehearsals.count) practice swing\(s.rehearsals.count == 1 ? "" : "s") set aside")
+            if s.rehearsals.count > 0 || s.waggles.count > 0 {
+                Text(sideLine(s))
                     .font(.grooveCaption).foregroundStyle(.muted)
             }
         }
@@ -230,6 +230,18 @@ struct TodayView: View {
         .shadow(color: Elevation.card, radius: Elevation.cardRadius, y: Elevation.cardY)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Live session: \(s.struckSwings.count) \(s.discipline.countWord), watch is \(c.liveState)")
+    }
+
+    /// "9 practice swings · 4 waggles", with the practice tempo when it exists.
+    private func sideLine(_ s: SessionSummary) -> String {
+        var parts: [String] = []
+        if s.rehearsals.count > 0 {
+            var p = "\(s.rehearsals.count) practice swing\(s.rehearsals.count == 1 ? "" : "s")"
+            if s.meanPracticeTempo > 0 { p += String(format: " at %.2f", s.meanPracticeTempo) }
+            parts.append(p)
+        }
+        if s.waggles.count > 0 { parts.append("\(s.waggles.count) waggle\(s.waggles.count == 1 ? "" : "s")") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -407,6 +419,7 @@ struct FormView: View {
                     EnsembleChart(traces: view.struckSwings.map(\.normalizedTrace))
                 }
                 tempoCard
+                if view.rehearsals.count >= 3 || view.effortMix.count > 1 { practiceCard }
                 // Only offered where hips actually move. In a chip they barely
                 // do and in a putt they effectively don't, so a number there
                 // would be noise dressed as insight.
@@ -466,6 +479,37 @@ struct FormView: View {
         }
     }
 
+    /// Practice swings against real ones, and how big the real ones were.
+    /// The first number here — tempo over the ball versus tempo in rehearsal
+    /// — is the classic range tell: a player who quickens on a real ball.
+    private var practiceCard: some View {
+        Card("practice swings and real ones") {
+            if view.rehearsals.count >= 3 {
+                HStack(alignment: .top, spacing: Space.m) {
+                    BroadcastTile(label: "practice tempo",
+                                  value: view.meanPracticeTempo > 0 ? String(format: "%.2f", view.meanPracticeTempo) : "—",
+                                  unit: ":1")
+                    BroadcastTile(label: "real tempo",
+                                  value: view.meanTempo > 0 ? String(format: "%.2f", view.meanTempo) : "—",
+                                  unit: ":1")
+                }
+                if let shift = view.tempoShiftOverBall {
+                    Note(abs(shift) < 0.15
+                         ? "Your real swings keep the same tempo as your practice swings. That's what you want."
+                         : shift < 0
+                           ? String(format: "You quicken over the ball — real swings run %.2f faster than practice swings. Try taking the practice tempo to the ball.", -shift)
+                           : String(format: "You slow down over the ball — real swings run %.2f slower than practice swings.", shift))
+                }
+                Note("\(view.rehearsals.count) practice \(lens.strokeWord)s, each timed on its own speed peak where the ball would have been.")
+            }
+            if view.effortMix.count > 1 {
+                Text(view.effortMix.map { "\($0.1) \($0.0.label)" }.joined(separator: " · "))
+                    .font(.grooveReadout).foregroundStyle(.bone)
+                Note("How big each real \(lens.strokeWord) was, judged by how fast your wrist moved against a committed one.")
+            }
+        }
+    }
+
     private func sequencingCard(_ lead: Double) -> some View {
         Card("hips and hands") {
             SequenceBar(leadMs: lead)
@@ -482,6 +526,21 @@ struct SessionCard: View {
     var isLatest = false
     var onDelete: ((Swing) -> Void)?
     @State private var expanded = false
+
+    /// "9 practice swings at 3.12 · 4 waggles", or nil when there were none.
+    private var sideLine: String? {
+        let sum = session.summary
+        var parts: [String] = []
+        if sum.rehearsals.count > 0 {
+            var p = "\(sum.rehearsals.count) practice swing\(sum.rehearsals.count == 1 ? "" : "s")"
+            if sum.meanPracticeTempo > 0 { p += String(format: " at %.2f", sum.meanPracticeTempo) }
+            parts.append(p)
+        }
+        if sum.waggles.count > 0 {
+            parts.append("\(sum.waggles.count) waggle\(sum.waggles.count == 1 ? "" : "s")")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     var body: some View {
         Card(isLatest ? "last session"
@@ -506,9 +565,8 @@ struct SessionCard: View {
                          : "—")
             }
 
-            let rehearsals = session.swings.count - session.struckCount
-            if rehearsals > 0 {
-                Note("\(rehearsals) practice swing\(rehearsals == 1 ? "" : "s") set aside — they don't count toward your numbers.")
+            if let line = sideLine {
+                Note(line + " — kept, but not counted in your numbers.")
             }
 
             if onDelete != nil {
@@ -518,13 +576,20 @@ struct SessionCard: View {
                 .font(.grooveCallout.weight(.semibold)).tint(.turf)
 
                 if expanded {
-                    ForEach(session.swings.filter(\.struck)) { s in
-                        HStack {
+                    ForEach(session.swings.filter { $0.resolvedKind != .waggle }) { s in
+                        HStack(spacing: Space.s) {
                             Text(s.date, style: .time)
                                 .font(.grooveReadout).foregroundStyle(.muted)
+                            if !s.struck {
+                                Text("practice")
+                                    .font(.grooveEyebrow).foregroundStyle(.muted)
+                            } else if let e = s.metrics.effortLabel {
+                                Text(e.label)
+                                    .font(.grooveEyebrow).foregroundStyle(.muted)
+                            }
                             Spacer()
-                            Text(String(format: "%.2f", s.metrics.tempoRatio))
-                                .font(.grooveReadout).foregroundStyle(.bone)
+                            Text(s.metrics.tempoRatio > 0 ? String(format: "%.2f", s.metrics.tempoRatio) : "—")
+                                .font(.grooveReadout).foregroundStyle(s.struck ? Color.bone : Color.muted)
                             Button { onDelete?(s) } label: {
                                 Image(systemName: Icon.remove).foregroundStyle(.muted)
                             }
@@ -670,12 +735,23 @@ struct SetupView: View {
     // 2 — the behaviour most likely to need nudging after a session.
     private var duckingCard: some View {
         Card("when your music drops") {
-            Question(title: "How eager should it be?",
-                     help: c.config.sensitivity.detail,
-                     selection: $c.config.sensitivity) {
-                Text("More often").tag(Sensitivity.eager)
-                Text("Balanced").tag(Sensitivity.balanced)
-                Text("Only when sure").tag(Sensitivity.strict)
+            Question(title: "Which swings drop the music?",
+                     help: c.config.duckMode.detail,
+                     selection: Binding(get: { c.config.duckMode },
+                                        set: { c.config.duckMode = $0 })) {
+                Text("Every swing").tag(DuckMode.everySwing)
+                Text("Only real shots").tag(DuckMode.routineOnly)
+                Text("Never").tag(DuckMode.off)
+            }
+
+            if c.config.duckMode == .routineOnly {
+                Question(title: "How eager should it be?",
+                         help: c.config.sensitivity.detail,
+                         selection: $c.config.sensitivity) {
+                    Text("More often").tag(Sensitivity.eager)
+                    Text("Balanced").tag(Sensitivity.balanced)
+                    Text("Only when sure").tag(Sensitivity.strict)
+                }
             }
 
             Divider().overlay(Color.muted.opacity(0.2))
@@ -706,7 +782,10 @@ struct SetupView: View {
             }
 
             if !c.config.hasCalibrated {
-                Note("Until it's taught, your music won't drop — it can't yet tell a real swing from a practice one.", tint: .alert)
+                Note(c.config.duckMode == .routineOnly
+                     ? "Until it's taught, your music won't drop — it can't yet tell a real swing from a practice one."
+                     : "Only needed if you switch to \"Only real shots\" above. Everything is recorded either way.",
+                     tint: c.config.duckMode == .routineOnly ? .alert : .accent)
             }
 
             Button(c.config.hasCalibrated ? "Teach it again" : "Teach it now") {
@@ -791,6 +870,7 @@ struct SetupView: View {
             Bullet("Nothing about the ball — no distance, no spin, no start line. It watches your body, not the shot.")
             Bullet("How hard you hit it is a rough guide, not a number to chase. On the longer clubs the watch reaches its limit, so a big hit and a huge one can read the same.")
             Bullet("It knows when you hit the ball to within about a hundredth of a second, which is plenty for timing but not for anything finer.")
+            Bullet("Walking, raking a ball over and teeing up are ignored, not logged. A practice swing is logged when it's actually swing-shaped — a waggle at address is counted separately.")
         }
     }
 }

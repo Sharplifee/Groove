@@ -132,31 +132,64 @@ struct RoutineTemplate: Codable {
 enum DetectorState: String { case watching, settling, armed, swinging, recovering }
 
 protocol RoutineDetectorDelegate: AnyObject {
-    func detectorDidArm(confidence: Double)
+    /// The phone should open its microphone ring now; a swing may be seconds
+    /// away. `routine` is true when the learned pre-shot model fired (the
+    /// "it recognised you" moment, worth a haptic), false when it is simply
+    /// the player having settled over the ball in every-swing mode.
+    func detectorDidArm(confidence: Double, routine: Bool)
     func detectorDidDisarm()
-    /// Takeaway on an ARMED swing — the audio duck fires here, ~1 s before the ball.
-    /// A swing that wasn't armed is still captured; it just never touches the audio.
+    /// Takeaway on a swing the audio should follow — the duck fires here,
+    /// ~1 s before the ball. A swing that didn't qualify is still captured;
+    /// it just never touches the audio.
     func detectorDidFireTakeaway(confidence: Double)
-    /// Fires for every completed swing, armed or not, struck or not.
+    /// Fires for every logged motion — strike, practice swing or waggle.
+    /// `wasArmed` means the audio was engaged for it and needs restoring if
+    /// no strike followed.
     func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool)
     /// Fires the instant a strike is confirmed, before the trace tail accrues.
     /// This is what the audio burst must key off — waiting for completion adds
     /// the whole trace-tail plus transfer latency, so the burst slices turf
     /// instead of the strike. Default no-op so existing delegates need not care.
     func detectorDidDetectImpact(wasArmed: Bool)
+    /// A motion ran and was not a swing of any kind — walking, raking a ball
+    /// over, teeing up. Counted so the face can say "ignored 14 movements";
+    /// never logged. `wasArmed` carries the same restore duty as above.
+    func detectorDidDiscardMotion(reason: String, wasArmed: Bool)
 }
 
 extension RoutineDetectorDelegate {
     func detectorDidDetectImpact(wasArmed: Bool) {}
+    func detectorDidDiscardMotion(reason: String, wasArmed: Bool) {}
 }
 
-/// # Capture and arming are independent
+/// # How a motion becomes a record
 ///
-/// An earlier version gated logging behind arming, which meant anything that
-/// suppressed the duck also suppressed all data — and made the first-strike
-/// gate a deadlock it could never escape. Now every takeaway is tracked and
-/// every swing is logged. Arming decides one thing only: whether the audio
-/// duck fires. That keeps calibration (ducking off, logging on) coherent.
+/// The wrist stream is cut into *episodes*: a run of rotation above the
+/// discipline's takeaway trigger, closed when the wrist drops under the end
+/// threshold and stays there. Nothing is decided about an episode until it
+/// closes (a strike is the one exception — it is confirmed live so the audio
+/// burst can fire). At close the whole motion is in hand and is classified by
+/// its shape:
+///
+/// - **strike** — an impact transient was confirmed inside it;
+/// - **practice** — no strike, but the motion is swing-shaped: one dominant
+///   speed peak preceded by a backswing and followed by a finish, inside the
+///   span a swing can take, above the rotation a swing must reach;
+/// - **waggle** — small and short, from a settled address, back to stillness;
+/// - **discarded** — everything else. Walking, raking, teeing up. Counted,
+///   never logged, and never allowed to teach the routine model.
+///
+/// The old engine had no notion of shape: any wrist motion lasting three
+/// seconds without a strike was logged as a practice swing. Walking between
+/// balls was a practice swing. That is where three sessions' 275 "practice
+/// swings" came from, and it poisoned the routine model's idea of what a
+/// rehearsal looks like.
+///
+/// # Capture and audio are independent
+///
+/// Every episode is tracked and every swing is logged, armed or not. Arming
+/// decides one thing only: whether the audio duck fires. Calibration (ducking
+/// off, logging on) stays coherent because of this.
 final class RoutineDetector {
 
     weak var delegate: RoutineDetectorDelegate?
@@ -172,16 +205,19 @@ final class RoutineDetector {
     /// exact arming the wrist did in the field; not used in the app.
     func installTemplate(_ t: RoutineTemplate) { template = t }
 
-    /// What the player is practising. Set from the watch before a session
-    /// starts, and it changes the detector's numbers rather than just a label:
-    /// impact threshold, trace window, and whether audio is touched at all.
-    /// A putt crosses 9 g at the wrist where a full iron crosses 110, so
-    /// running one discipline's threshold over another's data means the
-    /// crossing never happens and the stroke is never recorded.
     /// Rotation below which the wrist counts as still. One source of truth:
     /// the takeaway trigger floors at 1.2× this, and metrics time the backswing
     /// from the last frame under it.
     static let stillnessRotation: Double = 0.35
+    /// |user acceleration| ceiling for stillness, g.
+    static let stillnessAccel: Double = 0.12
+    /// How long the wrist must sit under the end threshold for a motion to
+    /// have finished. Longer than any pause at the top of a backswing.
+    static let episodeEndHold: TimeInterval = 0.3
+    /// Stillness required before a motion for it to count as "from address".
+    static let addressSettle: TimeInterval = 0.6
+    /// A motion still running past this is force-closed and judged.
+    static let maxEpisode: TimeInterval = 5.0
 
     var discipline: Discipline = .fullSwing {
         didSet {
@@ -197,49 +233,93 @@ final class RoutineDetector {
 
     /// True once this session has seen its first struck ball.
     private(set) var sessionOpened = false
+    /// Motions that ran and were not swings this session.
+    private(set) var discardedCount = 0
+
+    // MARK: Buffer
 
     private var buffer: [MotionFrame] = []
     private let bufferCapacity = Int(SwingAnalyzer.fs * 12)
+    /// Consecutive frames of stillness ending at the newest frame.
+    private var stillRun = 0
+    /// Length of the most recent completed stillness run, and how many
+    /// frames ago it ended — the takeaway trigger fires several frames into a
+    /// motion, so "was the player settled before this" has to be read from
+    /// the run that just ended, not from the current one.
+    private var lastStillRun = 0
+    private var framesSinceStill = 0
+
+    // MARK: Arming (audio only)
+
     private var settleStart: TimeInterval?
     private var armedAt: TimeInterval?
-    private var takeawayIdx: Int?
-    private var swingPeakRotation: Double = 0
-    /// Impact found, tail still accruing. Its existence disables the timeout —
-    /// a swing with a detected strike must never be logged as a rehearsal just
-    /// because it was slow getting there.
-    private var pendingImpact: Int?
-    private var pendingImpactFraction: Double = 1.0
-    private var recoverStart: TimeInterval?
     private var armConfidence: Double = 0
     private var isArmed = false
-    private var wasArmedForThisSwing = false
-
-    /// Plateau segmentation is expensive. Re-running it on every 100 Hz sample
-    /// burned CPU and battery for no benefit — 10 Hz is plenty for a hold that
-    /// lasts a second or more.
+    private var armedByRoutine = false
     private var samplesSinceSignature = 0
     private let signatureEvery = 10
-
     private let settleDwell: TimeInterval = 1.0
     private let armTimeout: TimeInterval = 30
-    private let swingTimeout: TimeInterval = 3.0
+
+    // MARK: Open episode
+
+    private struct Episode {
+        var startIdx: Int                 // absolute buffer index, trimmed along
+        var startT: TimeInterval
+        var startedFromAddress: Bool
+        var audioEngaged = false
+        var peakRot = 0.0
+        var peakRotIdx = 0
+        var peakAccel = 0.0
+        var clipped = false
+        /// Per-frame jerk from the search start; index 0 == searchStartIdx.
+        var jerks: [Double] = []
+        var searchStartIdx = 0
+        var jerkBaseline = 0.0
+        var sinceBaseline = 0
+        var candidate: (idx: Int, fraction: Double, jerk: Double)?
+        var impact: (idx: Int, fraction: Double, jerk: Double)?
+        var impactScore = 0.0
+        var quietRun = 0
+        /// Frames under the takeaway trigger: a looser second way to close.
+        var lowRun = 0
+        var restoredEarly = false
+        /// Duck wanted at takeaway, decided a quarter-second in (see below).
+        var duckPending = false
+        /// Rotation lobe count above 55% of peak, kept live so a walk can be
+        /// recognised (and its duck released) before the episode closes.
+        var lobes = 0
+        var inLobe = false
+    }
+    private var episode: Episode?
+    private var recoverStart: TimeInterval?
+    /// A struck swing closes while the follow-through is still shedding
+    /// speed. The remainder of that follow-through must not start a new
+    /// motion, so no takeaway is tracked until the wrist has dropped under
+    /// the trigger at least once.
+    private var awaitingDrop = false
 
     func reset() {
         buffer.removeAll(keepingCapacity: true)
         state = .watching
-        settleStart = nil; armedAt = nil; takeawayIdx = nil
-        pendingImpact = nil; pendingImpactFraction = 1.0; recoverStart = nil; swingPeakRotation = 0
-        isArmed = false; wasArmedForThisSwing = false
-        armConfidence = 0
+        settleStart = nil; armedAt = nil; armConfidence = 0
+        isArmed = false; armedByRoutine = false
         samplesSinceSignature = 0
-        // Every session starts closed — this is per-session, not per-install.
+        episode = nil; recoverStart = nil; awaitingDrop = false
+        stillRun = 0; lastStillRun = 0; framesSinceStill = 0
         sessionOpened = false
+        discardedCount = 0
     }
 
     /// Whether the duck is allowed to fire right now. Audio-only: never affects
     /// whether a swing is recorded.
     private var duckPermitted: Bool {
-        guard config.hasCalibrated else { return false }
+        switch config.duckMode {
+        case .off: return false
+        case .routineOnly: guard config.hasCalibrated else { return false }
+        case .everySwing: break
+        }
+        guard discipline.ducksAudio else { return false }
         if config.gateUntilFirstImpact && !sessionOpened { return false }
         return true
     }
@@ -248,48 +328,88 @@ final class RoutineDetector {
 
     func ingest(_ frame: MotionFrame) {
         buffer.append(frame)
-
-        // The buffer trims from the front once it's full, which shifts every
-        // absolute index into it. `takeawayIdx` must move with it — without this
-        // the index drifts one position per sample, so by impact it's ~110 off
-        // and every metric, the impact search, and the trace all read garbage.
-        if buffer.count > bufferCapacity {
+        // Trim in chunks, not one frame at a time: removeFirst shifts the
+        // whole array, and doing that a hundred times a second on a 1,200
+        // frame buffer is the kind of silent per-frame cost that lagged the
+        // wrist before. Two seconds of slack costs nothing.
+        if buffer.count > bufferCapacity + 200 {
             let removed = buffer.count - bufferCapacity
             buffer.removeFirst(removed)
-            if let t = takeawayIdx { takeawayIdx = max(0, t - removed) }
+            // Absolute indices into a rolling buffer must move with it, or
+            // they drift one position per sample and every metric reads
+            // garbage.
+            if episode != nil {
+                episode!.startIdx = max(0, episode!.startIdx - removed)
+                episode!.searchStartIdx = max(0, episode!.searchStartIdx - removed)
+                episode!.peakRotIdx = max(0, episode!.peakRotIdx - removed)
+                if let c = episode!.candidate { episode!.candidate = (max(0, c.idx - removed), c.fraction, c.jerk) }
+                if let i = episode!.impact { episode!.impact = (max(0, i.idx - removed), i.fraction, i.jerk) }
+            }
+        }
+
+        let still = frame.rotationMagnitude < Self.stillnessRotation
+            && frame.accelMagnitude < Self.stillnessAccel
+        if still {
+            stillRun += 1; framesSinceStill = 0
+        } else {
+            if stillRun > 0 { lastStillRun = stillRun }
+            stillRun = 0; framesSinceStill += 1
+        }
+        let settledBefore = framesSinceStill <= 40
+            && Double(lastStillRun) / SwingAnalyzer.fs >= Self.addressSettle
+
+        if episode != nil {
+            advanceEpisode(frame)
+            return
+        }
+        if awaitingDrop {
+            guard frame.rotationMagnitude < discipline.takeawayThreshold else { return }
+            awaitingDrop = false
         }
 
         // A takeaway is tracked from any non-swinging state, armed or not.
-        if state != .swinging, state != .recovering,
-           SwingAnalyzer.isTakeaway(Array(buffer.suffix(8)),
+        if SwingAnalyzer.isTakeaway(Array(buffer.suffix(8)),
                                     threshold: discipline.takeawayThreshold) {
-            beginSwing()
+            beginEpisode(settledBefore: settledBefore)
             return
         }
 
         switch state {
-        case .watching, .settling: evaluateSetup(frame)
+        case .watching, .settling: evaluateSetup(frame, still: still)
         case .armed:               evaluateArmed(frame)
-        case .swinging:            evaluateSwinging(frame)
         case .recovering:          evaluateRecovering(frame)
+        case .swinging:            state = .watching     // unreachable: episode owns it
         }
     }
 
-    private var isStill: Bool {
-        guard buffer.count > 20 else { return false }
-        return buffer.suffix(20).allSatisfy {
-            $0.rotationMagnitude < Self.stillnessRotation && $0.accelMagnitude < 0.12
-        }
-    }
+    // MARK: Setup / arming
 
-    private func evaluateSetup(_ f: MotionFrame) {
-        guard isStill else {
+    private func evaluateSetup(_ f: MotionFrame, still: Bool) {
+        guard still, stillRun > 20 else {
             if state == .settling { state = .watching; settleStart = nil }
             return
         }
         if state == .watching { state = .settling; settleStart = f.t; samplesSinceSignature = 0 }
-        guard let start = settleStart, f.t - start >= settleDwell else { return }
+        guard let start = settleStart else { return }
+        let settledFor = f.t - start
 
+        // Arming exists for the audio alone: it opens the phone mic ahead of
+        // a swing and, in routine mode, says the model recognised the setup.
+        // When the music can't be touched there is nothing to arm for.
+        switch config.duckMode {
+        case .off:
+            return
+        case .everySwing:
+            // Being over the ball IS the signal. Open the mic the moment the
+            // player has settled, so the ring is live before the takeaway.
+            // No routine model involved, no haptic.
+            if settledFor >= Self.addressSettle, !isArmed { arm(confidence: 1, routine: false, at: f.t) }
+            return
+        case .routineOnly:
+            guard config.hasCalibrated else { return }
+        }
+
+        guard settledFor >= settleDwell else { return }
         samplesSinceSignature += 1
         guard samplesSinceSignature >= signatureEvery else { return }
         samplesSinceSignature = 0
@@ -297,13 +417,18 @@ final class RoutineDetector {
         let sig = SwingAnalyzer.signature(Array(buffer.suffix(Int(SwingAnalyzer.fs * 6))))
         let confidence = template.confidence(sig)
         guard confidence >= config.armThreshold else { return }
+        arm(confidence: confidence, routine: true, at: f.t)
+    }
 
+    private func arm(confidence: Double, routine: Bool, at t: TimeInterval) {
         armConfidence = confidence
-        armedAt = f.t
+        armedAt = t
         isArmed = true
+        armedByRoutine = routine
         state = .armed
-        onTrace?(f.t, String(format: "armed (confidence %.2f)", confidence))
-        delegate?.detectorDidArm(confidence: confidence)
+        onTrace?(t, routine ? String(format: "armed by routine (confidence %.2f)", confidence)
+                            : "armed (settled at address)")
+        delegate?.detectorDidArm(confidence: confidence, routine: routine)
     }
 
     private func evaluateArmed(_ f: MotionFrame) {
@@ -313,196 +438,346 @@ final class RoutineDetector {
 
     private func disarm() {
         isArmed = false
+        armedByRoutine = false
         armedAt = nil
         state = .watching
         settleStart = nil
         delegate?.detectorDidDisarm()
     }
 
-    private func beginSwing() {
-        onTrace?(buffer.last?.t ?? 0, "takeaway (armed=\(isArmed))")
-        swingPeakRotation = 0
-        pendingImpact = nil
-        pendingImpactFraction = 1.0
-        takeawayIdx = max(0, buffer.count - 8)
-        wasArmedForThisSwing = isArmed
-        state = .swinging
-        // Only an armed swing touches the audio, and only when the gate allows.
-        if isArmed && duckPermitted {
-            delegate?.detectorDidFireTakeaway(confidence: armConfidence)
-        }
-    }
-
-    private func evaluateSwinging(_ f: MotionFrame) {
-        guard let takeaway = takeawayIdx else { state = .watching; return }
-        let elapsed = f.t - buffer[takeaway].t
-        let tail = Int(discipline.tracePost * SwingAnalyzer.fs)
-
-        // Running peak, kept incrementally — this is what scales the floor.
-        swingPeakRotation = max(swingPeakRotation, f.rotationMagnitude)
-        let floor = SwingAnalyzer.effectiveImpactThreshold(
-            base: discipline.wristImpactThreshold,
-            peakRotation: swingPeakRotation,
-            referenceRotation: discipline.referenceRotation)
-
-        if pendingImpact == nil,
-           let cross = SwingAnalyzer.impactCrossing(buffer, from: takeaway, threshold: floor) {
-            // A crossing is only a strike if it is the sharpest thing in the
-            // swing — the self-normalising idea from DECISIONS 39, which until
-            // now only held in the harness because live this ran on a growing
-            // buffer and locked the first crossing before the real peak
-            // existed. Wait for a short lookahead and take the candidate only
-            // if nothing sharper follows it; a wrist-cock or grip re-set spikes
-            // early and is then beaten by the real strike. But a genuine strike
-            // often lands within a few samples of the newest frame, so once the
-            // lookahead exists and the candidate still dominates, lock it —
-            // and never discard it, since the tail arrives on later ticks.
-            let candidate = cross.index
-            let confirmFor = Int(0.06 * SwingAnalyzer.fs)
-            let haveLookahead = buffer.count - 1 - candidate >= confirmFor
-            if haveLookahead {
-                // Skip the strike's own ring-down: the transient's rebound one
-                // or two samples later is nearly as sharp as the strike itself,
-                // and comparing against it rejected every real strike. Look
-                // past it for a genuinely separate, sharper event.
-                let ringDown = 3
-                let lo = candidate + 1 + ringDown
-                let hi = candidate + confirmFor + ringDown
-                let after = (lo...hi).compactMap {
-                    $0 < buffer.count ? SwingAnalyzer.jerk(buffer, at: $0) : nil
-                }.max() ?? 0
-                if cross.jerk >= after {
-                    pendingImpact = candidate
-                    pendingImpactFraction = cross.fraction
-                    onTrace?(f.t, String(format: "impact found (floor %.0f, peak rot %.1f, idx %d)",
-                                         floor, swingPeakRotation, candidate))
-                    delegate?.detectorDidDetectImpact(wasArmed: wasArmedForThisSwing)
-                }
-                // else a sharper event is imminent — keep looking.
-            }
-            // No lookahead yet: do nothing this tick and re-test next tick, by
-            // which point more tail has arrived. The swing timeout still guards
-            // against a candidate that never gets its lookahead.
-        }
-        if let impact = pendingImpact {
-            // Strike confirmed; the only thing left is collecting the trace
-            // tail. The timeout no longer applies — the old code kept it
-            // running, so a slow warm-up swing (or one whose takeaway fired
-            // early off a forward press) hit the 3-second limit AFTER its
-            // impact had been found and was logged as a rehearsal. A struck
-            // ball is a struck ball, however long the swing took to arrive.
-            if buffer.count - impact > tail { complete(takeaway: takeaway, impact: impact) }
-            return
-        }
-
-        // False start: a waggle or club lift at address sustains takeaway-level
-        // rotation for the trigger window, then dies. If rotation has collapsed
-        // shortly after the trigger with no strike, this was never a swing —
-        // abort silently back to watching. No rehearsal is logged and the
-        // template learns nothing, because there is nothing to learn from.
-        // The window closes at 0.7s so the near-zero rotation of a real
-        // transition pause at the top can never be mistaken for a dead waggle.
-        if elapsed > 0.35, elapsed < 0.7,
-           buffer.suffix(15).allSatisfy({ $0.rotationMagnitude
-                                          < discipline.takeawayThreshold * 0.6 }) {
-            onTrace?(f.t, "false start aborted — rotation died after the trigger")
-            state = .watching
-            takeawayIdx = nil
-            pendingImpact = nil
-            return
-        }
-
-        // No strike inside the window — this was a rehearsal. Restore audio now
-        // rather than waiting; a fast correction beats a cautious prediction.
-        if elapsed > swingTimeout {
-            onTrace?(f.t, "no strike inside the window — rehearsal")
-            complete(takeaway: takeaway, impact: nil)
-        }
-    }
-
     private func evaluateRecovering(_ f: MotionFrame) {
         if recoverStart == nil { recoverStart = f.t }
-        // Stillness releases recovery — but stillness alone was the only exit,
-        // and a fidgety wrist between range balls (raking the next one over,
-        // wind, waggling) could hold the detector in recovery indefinitely,
-        // blind to every swing that followed. Time releases it too.
-        guard isStill || f.t - (recoverStart ?? f.t) > 2.5 else { return }
-        onTrace?(f.t, isStill ? "recovered (still)" : "recovered (timed release)")
+        // Stillness releases recovery; time releases it too, so a fidgety
+        // wrist between balls cannot hold the detector blind.
+        guard stillRun > 20 || f.t - (recoverStart ?? f.t) > 2.5 else { return }
+        onTrace?(f.t, stillRun > 20 ? "recovered (still)" : "recovered (timed release)")
         state = .watching
         settleStart = nil
-        takeawayIdx = nil
         recoverStart = nil
+    }
+
+    // MARK: Episode
+
+    private func beginEpisode(settledBefore: Bool) {
+        let t = buffer.last?.t ?? 0
+        let startIdx = max(0, buffer.count - 8)
+        var e = Episode(startIdx: startIdx, startT: buffer[startIdx].t, startedFromAddress: settledBefore)
+        e.searchStartIdx = startIdx + Int(discipline.impactSearchDelay * SwingAnalyzer.fs)
+        e.peakRotIdx = startIdx
+
+        // Audio. Every-swing mode ducks any takeaway from a settled address;
+        // routine mode ducks only when the learned model armed first. Both
+        // need the gate and the discipline to allow it.
+        let engage: Bool
+        switch config.duckMode {
+        case .everySwing:  engage = settledBefore && duckPermitted
+        case .routineOnly: engage = isArmed && armedByRoutine && duckPermitted
+        case .off:         engage = false
+        }
+        e.duckPending = engage
+        episode = e
+        state = .swinging
+        onTrace?(t, "takeaway (from address=\(settledBefore), armed=\(isArmed), duck pending=\(engage))")
+    }
+
+    /// How far into a motion the duck decision waits. A waggle is a lift
+    /// that is already falling back by here; a backswing is still rising.
+    /// Scaled to the discipline so a short chip backswing isn't past its own
+    /// peak before it is judged. Leaves 600 ms+ before a full-swing impact.
+    private var duckDecisionDelay: TimeInterval { 0.25 * max(0.6, discipline.tracePre / 1.1) }
+
+    /// Fires the duck if, a quarter-second in, the wrist is still going back
+    /// — rotation holding or rising against 100 ms earlier. A waggle has
+    /// peaked and is dying by now, so it never ducks; a takeaway of any
+    /// speed is still building. The cost is a quarter-second of lead time;
+    /// the gain is that a player with three waggles before every shot keeps
+    /// their music.
+    private func decideDuck(_ e: inout Episode, at i: Int, now t: TimeInterval) {
+        e.duckPending = false
+        let back = max(e.startIdx, i - 10)
+        let rising = buffer[i].rotationMagnitude >= 0.85 * buffer[back].rotationMagnitude
+            && buffer[i].rotationMagnitude >= discipline.takeawayThreshold
+        if rising {
+            e.audioEngaged = true
+            onTrace?(t, "duck — takeaway still building")
+            delegate?.detectorDidFireTakeaway(confidence: armConfidence)
+        } else {
+            onTrace?(t, "no duck — motion already dying, a waggle")
+        }
+    }
+
+    private func advanceEpisode(_ f: MotionFrame) {
+        guard var e = episode else { return }
+        let i = buffer.count - 1
+        let rot = f.rotationMagnitude
+        let elapsed = f.t - e.startT
+
+        if e.duckPending, elapsed >= duckDecisionDelay { decideDuck(&e, at: i, now: f.t) }
+
+        if rot > e.peakRot { e.peakRot = rot; e.peakRotIdx = i }
+        e.peakAccel = max(e.peakAccel, f.accelMagnitude)
+        if abs(f.accel.x) > 15.6 || abs(f.accel.y) > 15.6 || abs(f.accel.z) > 15.6 { e.clipped = true }
+
+        // Lobe counting: a swing has one dominant speed lobe; a walk has one
+        // per stride. Tracked live so a walk can release the duck early.
+        let lobeLine = e.peakRot * 0.55
+        if rot >= lobeLine { if !e.inLobe { e.inLobe = true; e.lobes += 1 } }
+        else if rot < e.peakRot * 0.3 { e.inLobe = false }
+
+        // Impact search — incremental, one new jerk per frame.
+        if e.impact == nil, i >= e.searchStartIdx, i > 0 {
+            e.jerks.append(SwingAnalyzer.jerk(buffer, at: i))
+            e.sinceBaseline += 1
+            if e.jerkBaseline == 0 || e.sinceBaseline >= 10 {
+                e.jerkBaseline = e.jerks.sorted()[e.jerks.count / 2]
+                e.sinceBaseline = 0
+            }
+            let threshold = SwingAnalyzer.effectiveImpactThreshold(
+                base: discipline.wristImpactThreshold,
+                peakRotation: e.peakRot,
+                referenceRotation: discipline.referenceRotation)
+            // Two floors, both must clear. The global one (median texture of
+            // the whole motion, ×5, bounded by the discipline threshold) is
+            // what the field data tuned. The local one is physics the global
+            // floor can't see: a hard downswing's centripetal acceleration
+            // ramps steeply enough that at 100 Hz a smooth swing shows tens of
+            // g/s of "jerk" with no ball at all. A strike is a discontinuity
+            // against the motion immediately before it — the fastest part of
+            // the swing — so the spike must also stand several times above
+            // the jerk of the preceding 120 ms.
+            let local = SwingAnalyzer.localJerkLevel(e.jerks)
+            let floor = max(SwingAnalyzer.strikeFloor(threshold: threshold, baseline: e.jerkBaseline),
+                            local * SwingAnalyzer.localStrikeMultiple)
+            let rotGate = e.peakRot * 0.25
+            let jerk = e.jerks[e.jerks.count - 1]
+            let prev = e.jerks.count > 1 ? e.jerks[e.jerks.count - 2] : 0
+            let atSpeed = rot >= rotGate || buffer[max(0, i - 1)].rotationMagnitude >= rotGate
+            // Saturating the accelerometer is a strike in its own right —
+            // nothing without a ball pins ±16 g — but only at speed.
+            let saturated = abs(f.accel.x) > 15.6 || abs(f.accel.y) > 15.6 || abs(f.accel.z) > 15.6
+            // Nothing with three speed lobes behind it is a swing, so nothing
+            // in it is a ball — the end of a walk gets no strike candidate.
+            if (jerk > floor || saturated) && atSpeed && e.lobes <= 2 {
+                let span = jerk - prev
+                let fraction = span > 0 ? max(0, min(1, (floor - prev) / span)) : 1
+                if let c = e.candidate {
+                    // A sharper event after the candidate's own ring-down is
+                    // the real strike; the earlier one was a wrist-cock or a
+                    // re-set.
+                    if i > c.idx + 3, jerk > c.jerk { e.candidate = (i, fraction, jerk) }
+                } else {
+                    e.candidate = (i, fraction, jerk)
+                }
+            }
+            // Confirm the candidate once a short lookahead has arrived with
+            // nothing sharper in it (its own ring-down excluded).
+            if let c = e.candidate, i - c.idx >= Int(0.06 * SwingAnalyzer.fs) + 3 {
+                // Shape check now that the samples after the candidate exist:
+                // a ramp that merely crossed the floor is not a strike.
+                let clippedHere = abs(buffer[c.idx].accel.x) > 15.6 || abs(buffer[c.idx].accel.y) > 15.6
+                    || abs(buffer[c.idx].accel.z) > 15.6
+                guard clippedHere || SwingAnalyzer.isSpike(buffer, at: c.idx) else {
+                    onTrace?(f.t, String(format: "candidate at %d rejected — a ramp, not a spike", c.idx))
+                    e.candidate = nil
+                    episode = e
+                    return
+                }
+                e.impact = c
+                let localAtStrike = SwingAnalyzer.localJerkLevel(Array(e.jerks.prefix(c.idx - e.searchStartIdx + 1)))
+                e.impactScore = SwingAnalyzer.strikeScore(jerk: c.jerk, baseline: max(localAtStrike, e.jerkBaseline),
+                                                          threshold: threshold, clipped: e.clipped)
+                onTrace?(f.t, String(format: "impact found (floor %.0f, base %.0f, jerk %.0f, peak rot %.1f, score %.2f)",
+                                     floor, e.jerkBaseline, c.jerk, e.peakRot, e.impactScore))
+                delegate?.detectorDidDetectImpact(wasArmed: e.audioEngaged)
+            }
+        }
+
+        // Release the duck early when the motion has already shown it is not
+        // a swing: too many strides, or simply too long. A fast correction
+        // beats a cautious prediction — the restore is what the player hears.
+        if e.audioEngaged, !e.restoredEarly, e.impact == nil,
+           e.lobes >= 3 || elapsed > discipline.maxSwingDuration {
+            e.restoredEarly = true
+            onTrace?(f.t, e.lobes >= 3 ? "audio restored early — striding, not swinging"
+                                       : "audio restored early — too long to be a swing")
+            delegate?.detectorDidDiscardMotion(reason: "early restore", wasArmed: true)
+        }
+
+        // Closing: quiet for the hold, with the trace tail collected if a
+        // strike is pending; or hard timeout.
+        // Closing. Two ways a motion ends: the wrist goes properly quiet for
+        // the hold, or it drops under the takeaway trigger and idles there
+        // for a second — a player fidgeting at 0.8 rad/s after a swing has
+        // finished the swing, and waiting for true stillness would run the
+        // episode into the hard limit and throw the swing away. Either way
+        // the trace tail is collected first if a strike is pending.
+        // After a strike the swing is over once the follow-through has shed
+        // half its speed; whatever the wrist does next — walking straight to
+        // the next ball — is a new motion, not part of this one. Without this
+        // a strike followed by a walk ran into the hard limit as one episode.
+        let quietLine = e.impact != nil
+            ? max(discipline.episodeEndThreshold, e.peakRot * 0.5)
+            : discipline.episodeEndThreshold
+        let quiet = rot < quietLine
+        e.quietRun = quiet ? e.quietRun + 1 : 0
+        e.lowRun = rot < discipline.takeawayThreshold ? e.lowRun + 1 : 0
+        let held = Double(e.quietRun) / SwingAnalyzer.fs >= Self.episodeEndHold
+        let idled = Double(e.lowRun) / SwingAnalyzer.fs >= 1.0
+        let tailDone = e.impact.map { i - $0.idx >= Int(discipline.tracePost * SwingAnalyzer.fs) } ?? true
+        let forced = elapsed >= Self.maxEpisode
+        if idled, !held { e.quietRun = e.lowRun }
+        episode = e
+        if (held || idled) && tailDone {
+            close(forced: false)
+        } else if forced, tailDone {
+            close(forced: true)
+        } else if forced, e.impact != nil,
+                  elapsed >= Self.maxEpisode + discipline.tracePost + 0.2 {
+            // Tail still due past the hard limit: a little more, never forever.
+            close(forced: true)
+        }
     }
 
     // MARK: Completion + self-training
 
-    private func complete(takeaway: Int, impact: Int?) {
-        let setupWindow = Array(buffer.prefix(takeaway).suffix(Int(SwingAnalyzer.fs * 6)))
-        let sig = SwingAnalyzer.signature(setupWindow)
-        let struck = impact != nil
+    private func close(forced: Bool) {
+        guard let e = episode else { return }
+        episode = nil
+        awaitingDrop = true
+        let now = buffer.last?.t ?? 0
+        let lastMovingIdx = max(e.startIdx, buffer.count - 1 - (forced ? 0 : e.quietRun))
+        let duration = buffer[lastMovingIdx].t - e.startT
+        let audio = e.audioEngaged && !e.restoredEarly
 
-        // Score THIS swing against the template as it stands right now, before
-        // learning from it. Reusing `armConfidence` meant an unarmed rehearsal
-        // inherited the last armed swing's number — which is precisely the field
-        // calibration averages to prove the detector separates them.
-        let confidence = template.confidence(sig)
+        let verdict = classify(e, lastMovingIdx: lastMovingIdx, duration: duration, forced: forced)
+        onTrace?(now, String(format: "motion closed: %@ (%.2fs, peak %.1f rad/s, lobes %d, from address %@)",
+                             verdict.rawValue, duration, e.peakRot, e.lobes,
+                             e.startedFromAddress ? "yes" : "no"))
 
-        // The whole self-labeling loop: the ball is the ground truth.
-        template.learn(sig, struck: struck)
-        template.save(for: discipline)
-        if struck { sessionOpened = true }
-
-        // Both verdicts carry the two numbers the verdict itself rode on.
-        // Rehearsals used to save empty metrics, which made "were real
-        // strikes filed as rehearsals?" unanswerable from an export — 275
-        // rehearsals against 92 strikes across three range sessions, and no
-        // way to tell which of the 275 had a strike-shaped transient sitting
-        // just under the floor. Now every record says how hard the motion
-        // was and how sharp its sharpest moment was.
-        let swingFrames = Array(buffer.suffix(from: takeaway))
-        let observedPeakRot = swingFrames.map(\.rotationMagnitude).max() ?? 0
-        var observedPeakJerk = 0.0
-        for i in 1..<max(1, swingFrames.count) {
-            let j = abs(swingFrames[i].accelMagnitude
-                        - swingFrames[i - 1].accelMagnitude) * SwingAnalyzer.fs
-            if j > observedPeakJerk { observedPeakJerk = j }
-        }
-
-        let swing: Swing
-        if let impact {
-            var m = SwingAnalyzer.metrics(frames: buffer,
-                                          takeawayIdx: takeaway, impactIdx: impact,
-                                          impactFraction: pendingImpactFraction,
-                                          discipline: discipline,
-                                          stillRotation: Self.stillnessRotation)
-            m.peakJerk = observedPeakJerk
-            swing = Swing(struck: true, routine: sig, armConfidence: confidence,
-                          metrics: m,
-                          normalizedTrace: SwingAnalyzer.normalizedTrace(
-                              frames: buffer, impactIdx: impact,
-                              discipline: discipline))
-        } else {
-            var m = SwingMetrics()
-            m.discipline = discipline
-            m.peakRotation = observedPeakRot
-            m.peakJerk = observedPeakJerk
-            swing = Swing(struck: false, routine: sig, armConfidence: confidence,
-                          metrics: m, normalizedTrace: [])
-        }
-
-        let armed = wasArmedForThisSwing
-        isArmed = false
-        armedAt = nil
-        armConfidence = 0
-        wasArmedForThisSwing = false
+        // Arming is consumed by whatever motion followed it.
+        let wasArmed = isArmed
+        isArmed = false; armedByRoutine = false; armedAt = nil; armConfidence = 0
         state = .recovering
-        takeawayIdx = nil
-        pendingImpact = nil
-        pendingImpactFraction = 1.0
         recoverStart = nil
+        settleStart = nil
 
-        onTrace?(buffer.last?.t ?? 0,
-                 swing.struck ? "swing complete — STRUCK" : "swing complete — rehearsal")
-        delegate?.detectorDidCompleteSwing(swing, wasArmed: armed)
+        switch verdict {
+        case .discarded:
+            discardedCount += 1
+            delegate?.detectorDidDiscardMotion(reason: "not a swing", wasArmed: audio)
+            if wasArmed { delegate?.detectorDidDisarm() }
+            return
+        case .strike, .practice, .waggle:
+            break
+        }
+
+        let setupWindow = Array(buffer.prefix(e.startIdx).suffix(Int(SwingAnalyzer.fs * 6)))
+        let sig = SwingAnalyzer.signature(setupWindow)
+        // Score THIS motion against the template as it stands, before
+        // learning from it.
+        let confidence = template.confidence(sig)
+        let kind: SwingKind = verdict == .strike ? .strike : (verdict == .practice ? .practice : .waggle)
+
+        // Only genuine swings from a settled address may teach the routine
+        // model. A waggle has no routine before it worth learning, and a
+        // practice swing taken on the walk is not a rehearsal of anything.
+        if kind != .waggle, e.startedFromAddress {
+            template.learn(sig, struck: kind == .strike)
+            template.save(for: discipline)
+        }
+        if kind == .strike { sessionOpened = true }
+
+        let swing = build(kind: kind, episode: e, lastMovingIdx: lastMovingIdx,
+                          duration: duration, signature: sig, confidence: confidence)
+        onTrace?(now, "swing complete — " + (kind == .strike ? "STRUCK" : kind.rawValue)
+                 + String(format: " (tempo %.2f, effort %.2f)", swing.metrics.tempoRatio, swing.metrics.effort ?? 0))
+        delegate?.detectorDidCompleteSwing(swing, wasArmed: audio)
+    }
+
+    private enum Verdict: String { case strike, practice, waggle, discarded }
+
+    private func classify(_ e: Episode, lastMovingIdx: Int, duration: TimeInterval, forced: Bool) -> Verdict {
+        if e.impact != nil { return .strike }
+        let d = discipline
+        let rots = buffer[e.startIdx...lastMovingIdx].map(\.rotationMagnitude).sorted()
+        let median = rots.isEmpty ? 0 : rots[rots.count / 2]
+        let peakiness = median > 0 ? e.peakRot / median : .infinity
+        let peakPos = Double(e.peakRotIdx - e.startIdx) / max(1, Double(lastMovingIdx - e.startIdx))
+
+        // A waggle: started from address, never reached swing speed, over
+        // quickly, back to stillness.
+        if e.startedFromAddress, e.peakRot < d.swingPeakFloor, duration <= 1.5, !forced {
+            return .waggle
+        }
+
+        let swingShaped = !forced
+            && duration >= d.minSwingDuration && duration <= d.maxSwingDuration
+            && e.peakRot >= d.swingPeakFloor
+            && peakiness >= 2.2
+            && peakPos >= 0.2
+            && e.lobes <= 2
+        return swingShaped ? .practice : .discarded
+    }
+
+    private func build(kind: SwingKind, episode e: Episode, lastMovingIdx: Int,
+                       duration: TimeInterval, signature sig: RoutineSignature,
+                       confidence: Double) -> Swing {
+        let d = discipline
+        // Strikes align on the ball; practice swings on their own speed
+        // peak, which is where the ball would have been.
+        let alignIdx = e.impact?.idx ?? e.peakRotIdx
+        let fraction = e.impact?.fraction ?? 1.0
+
+        var m: SwingMetrics
+        var trace: [Double] = []
+        if kind != .waggle, alignIdx > e.startIdx + 2 {
+            m = SwingAnalyzer.metrics(frames: buffer, takeawayIdx: e.startIdx, impactIdx: alignIdx,
+                                      impactFraction: fraction, discipline: d,
+                                      stillRotation: Self.stillnessRotation)
+            trace = SwingAnalyzer.normalizedTrace(frames: buffer, impactIdx: alignIdx, discipline: d)
+            // Backswing sweep: rotation integrated from the true start to the
+            // top. A length proxy — a half swing and a full swing separate
+            // on this even when their speeds overlap.
+            let start = SwingAnalyzer.trueTakeawayIndex(buffer, trigger: e.startIdx,
+                                                        stillRotation: Self.stillnessRotation)
+            let tTop = buffer[alignIdx].t - m.downswing
+            var sweep = 0.0
+            var k = start + 1
+            while k <= alignIdx, buffer[k].t <= tTop {
+                sweep += buffer[k].rotationMagnitude * (buffer[k].t - buffer[k - 1].t); k += 1
+            }
+            m.backswingSweep = sweep
+        } else {
+            m = SwingMetrics()
+            m.discipline = d
+            m.peakRotation = e.peakRot
+        }
+        // Sharpest discontinuity across the whole motion, kept for every
+        // kind so an export can show a strike that was filed as practice.
+        var peakJerk = 0.0
+        if lastMovingIdx > e.startIdx {
+            for i in (e.startIdx + 1)...lastMovingIdx {
+                peakJerk = max(peakJerk, SwingAnalyzer.jerk(buffer, at: i))
+            }
+        }
+        m.peakJerk = peakJerk
+        m.peakRotation = e.peakRot
+        m.duration = duration
+        m.peakAccel = e.peakAccel
+        m.effort = d.referenceRotation > 0 ? min(1.2, e.peakRot / d.referenceRotation) : nil
+        m.startedFromAddress = e.startedFromAddress
+        if e.impact != nil {
+            m.strikeScore = e.impactScore
+        } else {
+            let spike = SwingAnalyzer.bestSpike(buffer, from: e.searchStartIdx, to: lastMovingIdx)
+            // Same line a strike is scored on: prominence over the local
+            // texture, then size against the discipline threshold.
+            m.strikeScore = SwingAnalyzer.strikeScore(jerk: spike.jerk, baseline: spike.jerk / max(spike.prominence, 0.001),
+                                                      threshold: d.wristImpactThreshold, clipped: false)
+        }
+        m.clipped = e.clipped || m.clipped
+
+        return Swing(struck: kind == .strike, kind: kind, routine: sig,
+                     armConfidence: confidence, metrics: m, normalizedTrace: trace)
     }
 }

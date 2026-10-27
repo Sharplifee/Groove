@@ -14,6 +14,11 @@ final class WatchController: NSObject, ObservableObject {
     @Published var state: DetectorState = .watching
     @Published var struckCount = 0
     @Published var rehearsalCount = 0
+    @Published var waggleCount = 0
+    /// Motions that ran and were not swings — walking, raking, teeing up.
+    @Published var ignoredCount = 0
+    /// Effort band of the last struck swing, for the face.
+    @Published var lastEffort: SwingEffort?
     @Published var lastTempo: Double = 0
     /// Struck tempos this session, oldest first — feeds the live consistency
     /// strip on the face. Capped so an all-day range session can't grow it.
@@ -145,6 +150,9 @@ final class WatchController: NSObject, ObservableObject {
             sessionID = UUID()
             struckCount = 0
             rehearsalCount = 0
+            waggleCount = 0
+            ignoredCount = 0
+            lastEffort = nil
             lastTempo = 0
             tempos = []
             plateauCount = 0
@@ -279,7 +287,7 @@ extension WatchController: RoutineDetectorDelegate {
     // main actor once per EVENT — a few per swing — where the old design paid
     // that price per FRAME. Sub-millisecond scheduling on a path where the
     // phone's audio ramp is the long pole anyway.
-    nonisolated func detectorDidArm(confidence: Double) {
+    nonisolated func detectorDidArm(confidence: Double, routine: Bool) {
       Task { @MainActor in
         state = .armed
         armConfidence = confidence
@@ -287,8 +295,20 @@ extension WatchController: RoutineDetectorDelegate {
         // the duck is actually needed.
         send(["event": "arm", "confidence": confidence])
         // The only haptic you feel before a shot, and it lands while you're
-        // still — never mid-motion.
-        Haptic.arm()
+        // still — never mid-motion. Only when the routine model recognised
+        // the setup: in every-swing mode arming is just "you stood still",
+        // and buzzing at every address would be noise.
+        if routine { Haptic.arm() }
+      }
+    }
+
+    nonisolated func detectorDidDiscardMotion(reason: String, wasArmed: Bool) {
+      Task { @MainActor in
+        if reason != "early restore" { ignoredCount += 1 }
+        state = .watching
+        // Music was dropped for a motion that turned out not to be a swing —
+        // a walk off a standstill. Bring it back now.
+        if wasArmed { send(["event": "restore"]) }
       }
     }
 
@@ -329,6 +349,7 @@ extension WatchController: RoutineDetectorDelegate {
         if swing.struck {
             struckCount += 1
             lastTempo = swing.metrics.tempoRatio
+            lastEffort = swing.metrics.effortLabel
             if swing.metrics.tempoRatio > 0 {
                 tempos.append(swing.metrics.tempoRatio)
                 if tempos.count > 200 { tempos.removeFirst() }
@@ -342,7 +363,7 @@ extension WatchController: RoutineDetectorDelegate {
             // Confirms the swing logged, so he never has to look at the watch.
             Haptic.captured()
         } else {
-            rehearsalCount += 1
+            if swing.resolvedKind == .waggle { waggleCount += 1 } else { rehearsalCount += 1 }
             if wasArmed { send(["event": "restore"]) }   // no ball — audio back now
         }
         plateauCount = swing.routine.plateauCount

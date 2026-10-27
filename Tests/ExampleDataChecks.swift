@@ -91,8 +91,16 @@ check("all traces are the same length",
       Set(traces.map(\.count)).count == 1, "len \(traces.first?.count ?? 0)")
 check("trace length matches the analyzer",
       traces.first?.count == SwingAnalyzer.traceLength)
-check("rehearsals carry no trace",
-      summary.rehearsals.allSatisfy { $0.normalizedTrace.isEmpty })
+check("practice swings carry a trace of their own; waggles carry none",
+      summary.rehearsals.allSatisfy { $0.normalizedTrace.count == SwingAnalyzer.traceLength }
+      && summary.waggles.allSatisfy { $0.normalizedTrace.isEmpty })
+check("the example has waggles, and they never count as practice swings",
+      !summary.waggles.isEmpty && summary.waggles.allSatisfy { !summary.rehearsals.contains($0) })
+check("example practice swings carry a tempo near the real ones, slightly slower",
+      full.meanPracticeTempo > full.meanTempo && full.meanPracticeTempo - full.meanTempo < 0.6,
+      String(format: "practice %.2f vs real %.2f", full.meanPracticeTempo, full.meanTempo))
+check("example full-swing session shows more than one effort band",
+      full.effortMix.count > 1, "\(full.effortMix.map { "\($0.1) \($0.0.label)" })")
 check("traces are the same length across disciplines",
       Set(summary.struckSwings.map(\.normalizedTrace.count)).count == 1,
       "so an ensemble never mixes window lengths")
@@ -338,7 +346,7 @@ do {
 // misfires from the range visit, so the fixes can never silently regress.
 final class SwingRecorder: RoutineDetectorDelegate {
     var swings: [Swing] = []
-    func detectorDidArm(confidence: Double) {}
+    func detectorDidArm(confidence: Double, routine: Bool) {}
     func detectorDidDisarm() {}
     func detectorDidFireTakeaway(confidence: Double) {}
     func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) { swings.append(swing) }
@@ -355,6 +363,40 @@ func stream(_ segs: [(Double, Double, Double)], from t0: Double = 0) -> [MotionF
     for (dur, rot, acc) in segs {
         for _ in 0..<Int(dur * 100) { out.append(mf(t, rot: rot, accel: acc)); t += 0.01 }
     }
+    return out
+}
+
+/// Deterministic noise in 0..<1.
+func noise(_ seed: Int, _ i: Int) -> Double {
+    let x = sin(Double(seed) * 12.9898 + Double(i) * 78.233) * 43758.5453
+    return x - x.rounded(.down)
+}
+
+/// A swing-shaped motion at 100 Hz: backswing lobe to ~40% of peak, a quiet
+/// top, a downswing ramping to `peak` rad/s, an optional strike sample, then a
+/// decaying finish. Accel follows rotation (centripetal, ~0.02 g per (rad/s)²)
+/// with optional per-sample texture. This is the shape every classification
+/// check runs against — flat plateaus are not swings and the engine says so.
+func swingShape(peak: Double, back: Double = 0.75, top: Double = 0.10, down: Double = 0.28,
+                finish: Double = 0.7, strike strikeAccel: Double? = nil, texture: Double = 0,
+                from t0: Double, seed: Int = 1) -> [MotionFrame] {
+    var out: [MotionFrame] = []; var t = t0; var i = 0
+    func push(_ rot: Double, _ extra: Double = 0) {
+        let base = 0.02 * rot * rot
+        let tex = texture * (noise(seed, i) - 0.5) * 2
+        out.append(mf(t, rot: max(0, rot), accel: max(0.002, base + tex + extra)))
+        t += 0.01; i += 1
+    }
+    let nb = Int(back * 100), nt = Int(top * 100), nd = Int(down * 100), nf = Int(finish * 100)
+    for k in 0..<nb { push(0.4 * peak * sin(Double(k) / Double(nb) * .pi) + 0.3) }
+    // The pause at the top IS the rotation minimum — the club has stopped —
+    // and the downswing builds from it.
+    for _ in 0..<nt { push(0.3) }
+    for k in 0..<nd { let u = Double(k + 1) / Double(nd); push(0.3 + (peak - 0.3) * u * u) }
+    if let s = strikeAccel { push(peak * 0.9, s) }
+    // The finish decays continuously from the peak — a ball-free swing has no
+    // discontinuity anywhere, which is the whole point of the practice checks.
+    for k in 0..<nf { let u = Double(k + 1) / Double(nf); push(peak * exp(-u * 4.5)) }
     return out
 }
 
@@ -388,8 +430,9 @@ do {
                          (0.12, 1.8, 0.20),      // the waggle
                          (1.5, 0.10, 0.02)])     // back to address stillness
     frames.forEach(det.ingest)
-    check("replay: a waggle aborts silently — no phantom rehearsal logged",
-          rec.swings.isEmpty)
+    check("replay: a waggle is filed as a waggle, never as a practice swing",
+          rec.swings.count == 1 && rec.swings[0].resolvedKind == .waggle
+          && !rec.swings[0].struck)
 }
 
 // Fault 3: recovery released by time, not only stillness — a fidgety wrist
@@ -627,6 +670,20 @@ do {
 }
 
 do {
+    // Quickening over the ball: real swings at ~2.5, practice at ~3.0, with
+    // enough spread to earn a score. The narrator must name it.
+    var s = narratorSession(reps: [], tempos: [2.4, 2.6, 2.5, 2.45, 2.55, 2.5])
+    for t in [3.0, 3.05, 2.95] {
+        var m = SwingMetrics(); m.discipline = .fullSwing; m.tempoRatio = t
+        s.swings.append(Swing(struck: false, kind: .practice,
+                              routine: RoutineSignature(plateauCount: 1, meanDwell: 0.3, totalSetupDuration: 0.3, transitionSharpness: 0.02, dwellVariance: 0),
+                              armConfidence: 0.3, metrics: m, normalizedTrace: []))
+    }
+    check("narrator: quickening over the ball against practice swings gets said",
+          s.narrative(previous: nil).contains("quicken over the ball"))
+}
+
+do {
     // Too few strokes: the narrator says so instead of inventing a story.
     let s = narratorSession(reps: [5.0, 5.0], tempos: [2.9, 2.9])
     check("narrator: with too little data it says exactly that",
@@ -671,16 +728,14 @@ do {
 do {
     let det = RoutineDetector(); let rec = SwingRecorder()
     det.delegate = rec; det.discipline = .fullSwing; det.reset()
-    var frames = stream([(1.2, 0.05, 0.005), (0.4, 1.6, 0.20)])
-    // Rough, jerky, ball-free motion: alternate accel every sample.
-    var t = frames.last!.t + 0.01
-    for k in 0..<80 {
-        frames.append(mf(t, rot: 6.0, accel: k % 2 == 0 ? 0.32 : 0.18)); t += 0.01
-    }
-    frames += stream([(3.0, 0.04, 0.005)], from: t)
+    var frames = stream([(1.2, 0.05, 0.005)])
+    // Rough, jerky, ball-free motion: heavy per-sample texture, no spike.
+    frames += swingShape(peak: 12, texture: 0.07, from: frames.last!.t + 0.01, seed: 7)
+    frames += stream([(3.0, 0.04, 0.005)], from: frames.last!.t + 0.01)
     frames.forEach(det.ingest)
     check("impact: a rough ball-free swing stays a practice swing",
-          rec.swings.count == 1 && !rec.swings[0].struck)
+          rec.swings.count == 1 && !rec.swings[0].struck
+          && rec.swings[0].resolvedKind == .practice)
 }
 
 // A sharp clunk at low rotation — grounding the club mid-window — is not a
@@ -851,6 +906,245 @@ do {
           floorSoft < floorCommitted)
     check("pitch: the committed floor is not inflated past the base",
           floorCommitted <= base + 0.001)
+}
+
+
+// MARK: - A simulated range session through the whole engine (2026-10-27)
+
+// No field capture exists yet, so this is the next best thing: a scripted
+// bucket of balls with everything that actually happens at a range — walking
+// to the next ball, raking one over, teeing up, waggles, practice swings at
+// three efforts, strikes at four — pushed through the real engine. Every
+// motion class the old engine got wrong is pinned here. When a real capture
+// lands it replaces nothing; it adds to this.
+
+enum Range {
+    static func still(_ secs: Double, from t0: Double, seed: Int) -> [MotionFrame] {
+        (0..<Int(secs * 100)).map { i in
+            mf(t0 + Double(i) / 100,
+               rot: 0.04 + 0.08 * noise(seed, i),
+               accel: 0.005 + 0.02 * noise(seed + 1, i))
+        }
+    }
+    /// Strides at 1.8 Hz: the wrist swings 0.7–4.3 rad/s, one lobe per step.
+    static func walk(_ secs: Double, from t0: Double, seed: Int) -> [MotionFrame] {
+        (0..<Int(secs * 100)).map { i in
+            let t = Double(i) / 100
+            let s = sin(2 * .pi * 1.8 * t)
+            return mf(t0 + t, rot: 2.5 + 1.8 * s + 0.2 * noise(seed, i),
+                      accel: 0.22 + 0.18 * abs(s) + 0.04 * noise(seed + 1, i))
+        }
+    }
+    /// One pull of the club to drag a ball over: a single soft lobe.
+    static func rake(from t0: Double, seed: Int) -> [MotionFrame] {
+        (0..<80).map { i in
+            let u = Double(i) / 80
+            let r = 3.0 * sin(u * .pi)
+            return mf(t0 + Double(i) / 100, rot: r + 0.1 * noise(seed, i), accel: 0.02 * r * r + 0.01)
+        }
+    }
+    /// Bending to tee a ball: three similar lobes with short gaps.
+    static func teeUp(from t0: Double, seed: Int) -> [MotionFrame] {
+        var out: [MotionFrame] = []; var t = t0; var i = 0
+        for peak in [3.5, 4.6, 3.2] {
+            for k in 0..<60 { let r = peak * sin(Double(k) / 60 * .pi); out.append(mf(t, rot: r + 0.1 * noise(seed, i), accel: 0.02 * r * r + 0.01)); t += 0.01; i += 1 }
+            for _ in 0..<20 { out.append(mf(t, rot: 0.8 + 0.2 * noise(seed, i), accel: 0.03)); t += 0.01; i += 1 }
+        }
+        return out
+    }
+    /// A waggle at address: brief, above the takeaway trigger, well under swing speed.
+    static func waggle(from t0: Double, seed: Int) -> [MotionFrame] {
+        (0..<35).map { i in
+            let r = 2.5 * sin(Double(i) / 35 * .pi)
+            return mf(t0 + Double(i) / 100, rot: r + 0.05 * noise(seed, i), accel: 0.02 * r * r + 0.01)
+        }
+    }
+    static func practice(effort: Double, from t0: Double, seed: Int) -> [MotionFrame] {
+        swingShape(peak: 22 * effort, texture: 0.02, from: t0, seed: seed)
+    }
+    static func strike(effort: Double, from t0: Double, seed: Int) -> [MotionFrame] {
+        swingShape(peak: 22 * effort, strike: 0.6 + 2.5 * effort, texture: 0.02, from: t0, seed: seed)
+    }
+}
+
+final class RangeRecorder: RoutineDetectorDelegate {
+    var swings: [Swing] = []
+    var takeaways = 0, restores = 0, discards = 0, arms = 0
+    func detectorDidArm(confidence: Double, routine: Bool) { arms += 1 }
+    func detectorDidDisarm() {}
+    func detectorDidFireTakeaway(confidence: Double) { takeaways += 1 }
+    func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) {
+        swings.append(swing)
+        if wasArmed && !swing.struck { restores += 1 }
+    }
+    func detectorDidDiscardMotion(reason: String, wasArmed: Bool) {
+        if reason != "early restore" { discards += 1 }
+        if wasArmed { restores += 1 }
+    }
+}
+
+do {
+    let det = RoutineDetector(); let rec = RangeRecorder()
+    var cfg = Config(); cfg.duckMode = .everySwing; cfg.gateUntilFirstImpact = false
+    det.config = cfg
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var narration: [String] = []
+    det.onTrace = { _, l in narration.append(l) }
+
+    var f: [MotionFrame] = []
+    var seed = 100
+    func add(_ make: (Double, Int) -> [MotionFrame]) {
+        let t0 = (f.last?.t ?? -0.01) + 0.01
+        f += make(t0, seed); seed += 7
+    }
+    add { Range.still(2.0, from: $0, seed: $1) }
+    add { Range.walk(4.0, from: $0, seed: $1) }          // to the bay
+    add { Range.still(1.5, from: $0, seed: $1) }
+    add { Range.waggle(from: $0, seed: $1) }
+    add { Range.still(0.8, from: $0, seed: $1) }
+    add { Range.practice(effort: 0.9, from: $0, seed: $1) }
+    add { Range.still(1.0, from: $0, seed: $1) }
+    add { Range.waggle(from: $0, seed: $1) }
+    add { Range.still(1.2, from: $0, seed: $1) }
+    add { Range.strike(effort: 0.9, from: $0, seed: $1) }  // full
+    add { Range.still(0.5, from: $0, seed: $1) }
+    add { Range.walk(2.0, from: $0, seed: $1) }
+    add { Range.rake(from: $0, seed: $1) }
+    add { Range.walk(1.0, from: $0, seed: $1) }
+    add { Range.still(1.0, from: $0, seed: $1) }
+    add { Range.practice(effort: 0.5, from: $0, seed: $1) }
+    add { Range.still(1.0, from: $0, seed: $1) }
+    add { Range.strike(effort: 0.5, from: $0, seed: $1) }  // half
+    add { Range.still(1.0, from: $0, seed: $1) }
+    add { Range.practice(effort: 0.3, from: $0, seed: $1) } // one-handed feel swing
+    add { Range.still(1.0, from: $0, seed: $1) }
+    add { Range.strike(effort: 0.3, from: $0, seed: $1) }  // soft
+    add { Range.still(1.0, from: $0, seed: $1) }
+    add { Range.teeUp(from: $0, seed: $1) }
+    add { Range.still(1.0, from: $0, seed: $1) }
+    add { Range.strike(effort: 1.0, from: $0, seed: $1) }  // driver-ish
+    add { Range.still(2.0, from: $0, seed: $1) }
+    f.forEach(det.ingest)
+
+    let strikes = rec.swings.filter { $0.resolvedKind == .strike }
+    let practice = rec.swings.filter { $0.resolvedKind == .practice }
+    let waggles = rec.swings.filter { $0.resolvedKind == .waggle }
+    check("range: every struck ball is a strike — full, half, soft and all-out",
+          strikes.count == 4, "\(strikes.count) of 4")
+    check("range: every practice swing is a practice swing — including the one-handed feel swing",
+          practice.count == 3, "\(practice.count) of 3")
+    check("range: both waggles are waggles, not practice swings",
+          waggles.count == 2, "\(waggles.count) of 2")
+    // The walk–rake–walk run never goes quiet, so it is one motion, not three.
+    check("range: walking, raking and teeing up are not swings of any kind",
+          rec.discards == 3, "\(rec.discards) motions ignored (walk; walk-rake-walk; tee-up)")
+    check("range: nothing walked between balls was logged",
+          rec.swings.count == 9, "\(rec.swings.count) logged")
+    check("range: strikes carry an effort band each",
+          Set(strikes.compactMap(\.metrics.effortLabel)).count >= 3,
+          strikes.compactMap { $0.metrics.effortLabel?.label }.joined(separator: " "))
+    check("range: the soft strike reads as easy and the all-out one as full",
+          strikes.first?.metrics.effortLabel == .full && strikes[2].metrics.effortLabel == .easy
+          && strikes.last?.metrics.effortLabel == .full)
+    check("range: practice swings carry a tempo of their own",
+          practice.allSatisfy { $0.metrics.tempoRatio > 1.5 && $0.metrics.tempoRatio < 5 },
+          practice.map { String(format: "%.2f", $0.metrics.tempoRatio) }.joined(separator: " "))
+    check("range: practice swings carry a trace aligned on their speed peak",
+          practice.allSatisfy { $0.normalizedTrace.count == SwingAnalyzer.traceLength })
+    check("range: strike tempos sit in a golfer's band",
+          strikes.allSatisfy { $0.metrics.tempoRatio > 1.8 && $0.metrics.tempoRatio < 4.5 },
+          strikes.map { String(format: "%.2f", $0.metrics.tempoRatio) }.joined(separator: " "))
+    check("range: every logged motion knows whether it started from address",
+          rec.swings.allSatisfy { $0.metrics.startedFromAddress == true })
+    check("range: strikes score higher on the strike line than practice swings",
+          (strikes.map { $0.metrics.strikeScore ?? 0 }.min() ?? 0)
+          > (practice.map { $0.metrics.strikeScore ?? 0 }.max() ?? 1))
+    check("range: every swing records its duration and peak acceleration",
+          rec.swings.filter { $0.resolvedKind != .waggle }
+              .allSatisfy { ($0.metrics.duration ?? 0) > 0.5 && ($0.metrics.peakAccel ?? 0) > 0 })
+    check("range: in every-swing mode the music dropped for each swing from address and nothing else",
+          rec.takeaways == 7 + 1, "\(rec.takeaways) takeaways (7 swings from address + the first walk off a standstill)")
+    check("range: the duck on the walk was released before the walk ended",
+          narration.contains { $0.contains("striding, not swinging") })
+    check("range: every ducked motion with no ball restored the audio",
+          rec.restores >= 4, "\(rec.restores) restores")
+    let summary = SessionSummary(swings: rec.swings)
+    check("range: the session summary separates practice swings from waggles",
+          summary.rehearsals.count == 3 && summary.waggles.count == 2)
+    check("range: the practice-vs-real tempo shift is reported once both have three reps",
+          summary.tempoShiftOverBall != nil)
+    check("range: the effort mix lists the bands that occurred",
+          summary.effortMix.map(\.1).reduce(0, +) == 4, "\(summary.effortMix)")
+}
+
+// The same bucket in routine-only mode: nothing ducks until the routine model
+// is trained and calibrated, but every swing is still logged — capture and
+// arming stay independent.
+do {
+    let det = RoutineDetector(); let rec = RangeRecorder()
+    var cfg = Config(); cfg.duckMode = .routineOnly; cfg.hasCalibrated = false
+    det.config = cfg
+    det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var f: [MotionFrame] = []
+    func add(_ make: (Double, Int) -> [MotionFrame], _ seed: Int) {
+        let t0 = (f.last?.t ?? -0.01) + 0.01; f += make(t0, seed)
+    }
+    add({ Range.still(1.5, from: $0, seed: $1) }, 3)
+    add({ Range.practice(effort: 0.8, from: $0, seed: $1) }, 4)
+    add({ Range.still(1.2, from: $0, seed: $1) }, 5)
+    add({ Range.strike(effort: 0.8, from: $0, seed: $1) }, 6)
+    add({ Range.still(1.5, from: $0, seed: $1) }, 7)
+    f.forEach(det.ingest)
+    check("routine-only: untaught, the music is never touched",
+          rec.takeaways == 0 && rec.arms == 0)
+    check("routine-only: untaught, every swing is still logged",
+          rec.swings.count == 2 && rec.swings[1].struck)
+}
+
+// Putting through the same engine: a slow, low stroke must register as a
+// stroke at all (the old fixed takeaway never saw one), with a strike.
+do {
+    let det = RoutineDetector(); let rec = RangeRecorder()
+    var cfg = Config(); cfg.duckMode = .everySwing
+    det.config = cfg
+    det.delegate = rec; det.discipline = .putting; det.reset()
+    var f = Range.still(1.5, from: 0, seed: 11)
+    // Backstroke, short pause, forward stroke, tap, short follow.
+    f += swingShape(peak: 2.4, back: 0.5, top: 0.08, down: 0.25, finish: 0.4,
+                    strike: 0.25, texture: 0.004, from: f.last!.t + 0.01, seed: 12)
+    f += Range.still(1.5, from: f.last!.t + 0.01, seed: 13)
+    f += swingShape(peak: 2.2, back: 0.5, top: 0.08, down: 0.25, finish: 0.4,
+                    texture: 0.004, from: f.last!.t + 0.01, seed: 14)
+    f += Range.still(1.5, from: f.last!.t + 0.01, seed: 15)
+    f.forEach(det.ingest)
+    check("putting: a putt with the ball reads as a strike",
+          rec.swings.first?.resolvedKind == .strike, "\(rec.swings.map(\.resolvedKind))")
+    check("putting: a practice stroke reads as practice",
+          rec.swings.count == 2 && rec.swings[1].resolvedKind == .practice)
+    check("putting: the green never ducks the music", rec.takeaways == 0)
+}
+
+// Motion-level fields survive the archive and old records still decode.
+do {
+    var m = SwingMetrics(); m.duration = 1.4; m.effort = 0.7; m.strikeScore = 0.9
+    let s = Swing(struck: true, kind: .strike, routine: RoutineSignature(plateauCount: 2, meanDwell: 0.5, totalSetupDuration: 2, transitionSharpness: 0.1, dwellVariance: 0.1), armConfidence: 0.5, metrics: m, normalizedTrace: [0, 1])
+    let data = try! JSONEncoder().encode([s])
+    let back = try! JSONDecoder().decode([Swing].self, from: data)
+    check("archive: kind and motion fields round-trip",
+          back[0].resolvedKind == .strike && back[0].metrics.effort == 0.7 && back[0].metrics.effortLabel == .threeQuarter)
+    // A record from before `kind` existed: struck=false means practice.
+    let legacy = """
+    [{"id":"7E57E57E-0000-4000-8000-000000000001","date":0,"sessionID":"7E57E57E-0000-4000-8000-000000000002","struck":false,"routine":{"plateauCount":1,"meanDwell":0.3,"totalSetupDuration":0.3,"transitionSharpness":0.0,"dwellVariance":0.0},"armConfidence":0.4,"metrics":{"discipline":"fullSwing","backswing":0,"downswing":0,"transitionDwell":0,"tempoRatio":0,"transitionSharpness":0,"smoothness":0,"peakRotation":0,"clipped":false},"normalizedTrace":[]}]
+    """
+    let old = try! JSONDecoder().decode([Swing].self, from: legacy.data(using: .utf8)!)
+    check("archive: a record saved before kinds existed decodes as a practice swing",
+          old[0].resolvedKind == .practice && old[0].kind == nil)
+    var c = Config(); c.hasOnboarded = true
+    let cj = try! JSONEncoder().encode(c)
+    let legacyCfg = String(data: cj, encoding: .utf8)!.replacingOccurrences(of: ",\"duckModeStored\":\"everySwing\"", with: "")
+    let cc = try! JSONDecoder().decode(Config.self, from: legacyCfg.data(using: .utf8)!)
+    check("config: a config saved before duck modes existed defaults to every swing",
+          cc.duckMode == .everySwing)
 }
 
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")

@@ -79,7 +79,8 @@ struct WatchRootView: View {
                 stat(c.discipline.countWord, "\(c.struckCount)")
                 Spacer()
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text("TEMPO").font(.system(size: 9)).foregroundStyle(.secondary)
+                    Text(c.lastEffort.map { "TEMPO · \($0.label.uppercased())" } ?? "TEMPO")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
                     HStack(alignment: .lastTextBaseline, spacing: 3) {
                         Text(c.lastTempo > 0 ? String(format: "%.1f", c.lastTempo) : "—")
                             .font(.system(size: 19, weight: .heavy, design: .monospaced))
@@ -97,10 +98,11 @@ struct WatchRootView: View {
                     .frame(height: 15)
             }
 
-            if c.rehearsalCount > 0 {
-                Text("\(c.rehearsalCount) practice \(c.discipline.strokeWord)s")
+            if c.rehearsalCount > 0 || c.waggleCount > 0 || c.ignoredCount > 0 {
+                Text(sideCounts)
                     .font(.system(size: 8))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
             // Only before a session. Traces from two disciplines must never
@@ -158,6 +160,15 @@ struct WatchRootView: View {
     }
 
     private var gold: Color { Color(red: 0.988, green: 0.890, blue: 0.000) }
+
+    /// "12 practice · 3 waggles · 7 ignored" — only the parts that exist.
+    private var sideCounts: String {
+        var parts: [String] = []
+        if c.rehearsalCount > 0 { parts.append("\(c.rehearsalCount) practice") }
+        if c.waggleCount > 0 { parts.append("\(c.waggleCount) waggle\(c.waggleCount == 1 ? "" : "s")") }
+        if c.ignoredCount > 0 { parts.append("\(c.ignoredCount) ignored") }
+        return parts.joined(separator: " · ")
+    }
 
     private func stat(_ k: String, _ v: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -276,7 +287,7 @@ struct WatchPreview: View {
             }
             TempoStrip(tempos: [3.02, 2.96, 3.05, 2.71, 3.01, 2.98, 3.03])
                 .frame(height: 15)
-            Text("41 practice swings").font(.system(size: 8)).foregroundStyle(.secondary)
+            Text("11 practice · 3 waggles · 7 ignored").font(.system(size: 8)).foregroundStyle(.secondary)
             Button { } label: {
                 Text(running ? "End" : "Start").frame(maxWidth: .infinity)
             }

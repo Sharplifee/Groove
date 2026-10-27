@@ -118,7 +118,7 @@ struct OnboardingView: View {
 
     private var calibrate: some View {
         Step(title: "Teach it your swing.",
-             message: "Go hit about ten balls the way you normally would, taking your usual practice swings in between — including the serious ones when you're working on something. Those are the hard ones for it to tell apart.\n\nStart the session from your watch. Your music won't drop during this part.") {
+             message: "Optional. Out of the box your music drops on every swing from address and comes straight back if there was no ball. If you'd rather it left practice swings alone, it has to learn your pre-shot routine first: go hit about ten balls the way you normally would, with your usual practice swings in between.\n\nStart the session from your watch.") {
             VStack(spacing: Space.l) {
                 CalibrationProgress(real: c.summary.struckSwings.count,
                                     rehearsal: c.summary.rehearsals.count)
@@ -135,7 +135,7 @@ struct OnboardingView: View {
                 }
 
                 Button(c.calibrationResult?.isReady == true
-                       ? "Turn it on" : "Skip for now") {
+                       ? "Leave practice swings alone" : "Skip — drop on every swing") {
                     c.finishCalibration(accepted: c.calibrationResult?.isReady == true)
                 }
                 .buttonStyle(PrimaryButton())

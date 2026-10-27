@@ -642,3 +642,68 @@ of the mode mismatch. Pitching reference is now pinned to the measured 13.5;
 full swing and the still-untested disciplines stay on the 22*scale line until
 their own data moves them. Pinned: a soft pitch must ease the floor below a
 committed pitch, and the committed floor must not inflate past the base.
+
+## 46. The engine learns what a swing is — and the music drops without a thesis
+
+Field verdict from Connor on 2026-10-27: "it kind of works, doesn't work well."
+A line-by-line read of the detector found four structural faults, not tuning
+faults, and the engine was rebuilt around motion episodes rather than patched.
+
+**Fault 1 — any wrist motion lasting three seconds was a practice swing.**
+The old trigger was "rotation above 1 rad/s for six samples", and the only
+exits were a strike or a 3-second timeout. Walking to the next ball, raking
+one over, teeing up: all "practice swings", each with a routine signature that
+then *trained the rehearsal class of the arming model*. That is where 275
+practice swings against 92 strikes came from, and it is why the routine
+scorer capped at AUC 0.67 — half of what it learned as "rehearsal" was a
+stroll. Now the stream is cut into episodes (takeaway → wrist quiet for 300 ms,
+or under the trigger for a second), and an episode is only ever filed as a
+kind it actually matches: strike, practice swing, waggle, or discarded.
+Discarded is the new default for anything not swing-shaped — one dominant
+speed lobe (two at most), preceded by a backswing, inside 0.5–3.5 s, above
+22% of a committed swing's peak rotation, back to quiet. Only swings from a
+settled address teach the routine model.
+
+**Fault 2 — the music never dropped for most players.** Ducking was gated on
+`hasCalibrated`, which required an 8+8 calibration with separation > 0.18
+from features that rarely deliver it. "Skip for now" meant an app whose
+headline feature never fired once. There is now a `DuckMode`: *every swing*
+(default — any takeaway from a settled address ducks; no ball, restored
+within the swing), *only real shots* (the learned routine, still gated on
+teaching, and selected automatically when a calibration is accepted), and
+*never*. Arming no longer buzzes the wrist unless the routine model fired.
+
+**Fault 3 — a hard, clean downswing read as a strike.** The jerk floor was
+measured against the median texture of the whole motion, which the quiet
+backswing dominates, so a committed swing's own centripetal rise (tens of
+g/s at 100 Hz, no ball involved) could cross it. A strike must now also stand
+three times above the upper-quartile jerk of the 120 ms before it, and must
+be a *spike* — the acceleration gives back half the jump within three
+samples. A ramp never does. Saturating the accelerometer counts as a strike
+on its own. No strike candidate is accepted in a motion with three speed
+lobes behind it (the end of a walk), and the end of a walk's drop-to-nothing
+no longer passes as a falling edge.
+
+**Fault 4 — practice swings were logged as empty records.** They now carry
+full metrics timed on their own speed peak (where the ball would have been),
+a trace aligned on it, effort, duration and a strike score on the same line a
+real strike is scored on. That makes two new things sayable: the practice-vs-
+real tempo shift (quickening over the ball, the commonest range fault) and the
+effort mix of a session (full / ¾ / half / easy, from peak rotation against
+the discipline reference). Waggles are logged as their own kind — counted,
+never scored, never taught.
+
+Also: the duck decision now waits a quarter-second into the takeaway and
+fires only if the wrist is still going back; a waggle has peaked and is dying
+by then. A struck swing closes once the follow-through has shed half its
+speed, so walking straight off after a shot is a new motion. The top of the
+backswing is the end of the rotation minimum, not the last sample under the
+quiet line (a systematic late bias on every tempo). The buffer trims in
+chunks instead of shifting 1,200 frames every sample.
+
+Pinned by 141 checks including a scripted bucket of balls — walking, raking,
+teeing up, waggles, practice swings at three efforts, strikes at four —
+through the real engine; all of it would have been logged as practice swings
+or strikes before. Still unverified on hardware: every number above was set
+against synthetic motion and the pitching export. The replay tool and the
+capture mode are unchanged and are how the next range session settles them.

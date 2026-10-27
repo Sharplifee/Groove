@@ -175,7 +175,7 @@ enum SwingAnalyzer {
             previous = mag
         }
         let baseline = jerks.sorted()[jerks.count / 2]
-        let floor = min(max(threshold * 0.55, baseline * 5.0), threshold * 1.4)
+        let floor = strikeFloor(threshold: threshold, baseline: baseline)
         let peakRot = frames[start...].map(\.rotationMagnitude).max() ?? 0
         let rotGate = peakRot * 0.25
 
@@ -198,6 +198,91 @@ enum SwingAnalyzer {
     static func jerk(_ frames: [MotionFrame], at i: Int) -> Double {
         guard i > 0, i < frames.count else { return 0 }
         return abs(frames[i].accelMagnitude - frames[i - 1].accelMagnitude) * fs
+    }
+
+    /// The self-normalising strike floor, in one place so the live engine and
+    /// `impactCrossing` cannot drift apart: five times this swing's own jerk
+    /// texture, never under 55% of the scaled threshold (sensor noise cannot
+    /// qualify on a buttery swing) and never over 140% of it (the caller's
+    /// ceiling still holds).
+    static func strikeFloor(threshold: Double, baseline: Double) -> Double {
+        min(max(threshold * 0.55, baseline * 5.0), threshold * 1.4)
+    }
+
+    /// How many times above the preceding 120 ms a spike must stand to be a
+    /// strike. A smooth hard downswing's own jerk rises gradually (≈1.2× over
+    /// a few samples); a ball strike is 5–20× the texture just before it.
+    static let localStrikeMultiple: Double = 3.0
+
+    /// Upper-quartile jerk over the 120 ms ending three samples before the
+    /// newest — the swing's texture immediately before a candidate, with the
+    /// candidate's own rise excluded. The upper quartile rather than the
+    /// median so a steepening ramp is judged against its own recent steepness.
+    /// Zero until enough history exists.
+    static func localJerkLevel(_ jerks: [Double]) -> Double {
+        let n = jerks.count
+        guard n >= 6 else { return 0 }
+        let lo = max(0, n - 16), hi = n - 3
+        guard hi > lo else { return 0 }
+        let w = jerks[lo..<hi].sorted()
+        return w[min(w.count - 1, Int(Double(w.count) * 0.75))]
+    }
+
+    /// A strike is a spike, not a step: the acceleration jumps and then gives
+    /// most of it back within a few samples as the club leaves the ball. A
+    /// smooth downswing's centripetal rise keeps climbing. True when the
+    /// magnitude within three samples after `i` has fallen back at least
+    /// halfway toward where it was before the jump. Saturation is exempt —
+    /// a pinned accelerometer can hold its ceiling for a sample or two.
+    static func isSpike(_ frames: [MotionFrame], at i: Int) -> Bool {
+        guard i > 0, i + 1 < frames.count else { return false }
+        let before = frames[i - 1].accelMagnitude
+        let jump = frames[i].accelMagnitude - before
+        if jump <= 0 {
+            // A sharp drop is the falling edge of a spike only if the motion
+            // carries on afterwards. A drop to nothing is the wrist coming to
+            // rest — the end of a walk, a club set down — not a ball.
+            return frames[i].accelMagnitude >= 0.25 * before
+        }
+        let target = before + 0.5 * jump
+        let hi = min(frames.count - 1, i + 3)
+        for k in (i + 1)...hi where frames[k].accelMagnitude <= target { return true }
+        return false
+    }
+
+    /// 0–1 — how strike-like a discontinuity is. Half the weight is
+    /// prominence over the swing's own texture (a strike stands five to
+    /// twenty times above it), half is size against the discipline's
+    /// committed-strike threshold; a saturated accelerometer is a strike in
+    /// its own right and pins the score high. Recorded for every motion, so
+    /// a borderline strike filed as practice is visible in an export.
+    static func strikeScore(jerk: Double, baseline: Double, threshold: Double, clipped: Bool) -> Double {
+        if clipped { return 1 }
+        let prominence = jerk / max(baseline, 1)
+        let byProminence = max(0, min(1, (prominence - 2) / 8))
+        let bySize = max(0, min(1, jerk / max(threshold, 1)))
+        return 0.6 * byProminence + 0.4 * bySize
+    }
+
+    /// The most strike-like moment in a motion that had no confirmed strike:
+    /// the best (jerk over the texture of the preceding 120 ms) among samples
+    /// that are spike-shaped, with the jerk at that sample. Lets a practice
+    /// swing be scored on exactly the same line a strike was, so an export
+    /// shows which "practice" swings were a whisker under it.
+    static func bestSpike(_ frames: [MotionFrame], from lo: Int, to hi: Int)
+        -> (jerk: Double, prominence: Double) {
+        guard hi > lo + 1 else { return (0, 0) }
+        var jerks: [Double] = []
+        jerks.reserveCapacity(hi - lo)
+        var best: (jerk: Double, prominence: Double) = (0, 0)
+        for i in (lo + 1)...hi {
+            let j = jerk(frames, at: i)
+            let local = localJerkLevel(jerks)
+            jerks.append(j)
+            let p = j / max(local, 1)
+            if p > best.prominence, isSpike(frames, at: i) { best = (j, p) }
+        }
+        return best
     }
 
     /// The moment the club actually started back: walk from the trigger
@@ -313,7 +398,21 @@ enum SwingAnalyzer {
             while i > searchLo {
                 if frames[i].rotationMagnitude < quiet {
                     streak += 1
-                    if streak >= 3 { topIdx = i + 2; break }
+                    if streak >= 3 {
+                        // The quiet run ends at i+2. Its last sample is biased
+                        // late by however long rotation took to climb back to
+                        // the quiet line, so walk on through the run to its
+                        // true bottom and take the last sample sitting on it.
+                        let runEnd = i + 2
+                        var runStart = i
+                        while runStart > searchLo, frames[runStart - 1].rotationMagnitude < quiet { runStart -= 1 }
+                        let bottom = frames[runStart...runEnd].map(\.rotationMagnitude).min() ?? 0
+                        let sill = bottom + 0.15 * max(0, quiet - bottom)
+                        var j = runEnd
+                        while j > runStart, frames[j].rotationMagnitude > sill { j -= 1 }
+                        topIdx = j
+                        break
+                    }
                 } else {
                     streak = 0
                 }

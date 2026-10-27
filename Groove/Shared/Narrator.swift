@@ -68,7 +68,18 @@ extension SessionSummary {
                 return "You slowed down as the session went on — the last few \(discipline.strokeWord)s took longer than your first."
             }
         }
-        // 2. Sequencing, when it exists: the order of hips and hands is the
+        // 2. Tempo over the ball against tempo in rehearsal. A player whose
+        //    real swings run markedly quicker than their practice swings is
+        //    the single most common range fault, and now it's measured.
+        if let shift = tempoShiftOverBall {
+            if shift <= -0.3 {
+                return String(format: "You quicken over the ball — your real \(discipline.strokeWord)s ran %.1f faster than your practice ones. Take the practice tempo to the ball.", -shift)
+            }
+            if shift >= 0.3 {
+                return String(format: "You slow down over the ball — your real \(discipline.strokeWord)s ran %.1f slower than your practice ones.", shift)
+            }
+        }
+        // 3. Sequencing, when it exists: the order of hips and hands is the
         //    most coachable single fact a full swing produces.
         if let lead = meanPelvisLead {
             if lead >= 20 {
@@ -78,7 +89,7 @@ extension SessionSummary {
                 return "Your hands are starting down before your hips. Letting your lower body go first is the one thing worth working on from this session."
             }
         }
-        // 3. Putting gets its own truth.
+        // 4. Putting gets its own truth.
         if discipline == .putting, repeatability > 0 {
             return "On the green, repeating the stroke is the whole game — the read and the speed hide everything else."
         }
