@@ -238,9 +238,21 @@ jobs:
           # The real proof for internal testers: the build has entered beta
           # testing. VALID alone is not enough; compliance or review can hold a
           # VALID build out of testers' hands.
-          detail = call("GET", f"/v1/builds/{target['id']}/buildBetaDetail")
-          state = ((detail or {}).get("data") or {}).get("attributes", {}).get("internalBuildState")
-          print("   internalBuildState =", state)
+          # VALID flips to READY_FOR_BETA_TESTING and then, a minute or so
+          # later, to IN_BETA_TESTING once Apple has pushed it to the internal
+          # groups. With the per-call token this step now arrives within
+          # seconds of VALID and used to read the intermediate state and fail
+          # (build 59). Poll it; only a build that never gets there fails.
+          state = None
+          for _ in range(20):
+              detail = call("GET", f"/v1/builds/{target['id']}/buildBetaDetail")
+              state = ((detail or {}).get("data") or {}).get("attributes", {}).get("internalBuildState")
+              print("   internalBuildState =", state)
+              if state == "IN_BETA_TESTING": break
+              if state not in ("READY_FOR_BETA_TESTING", "PROCESSING_EXCEPTION", None):
+                  break
+              if state == "PROCESSING_EXCEPTION": break
+              time.sleep(30)
           if state != "IN_BETA_TESTING":
               raise SystemExit(f"build {VERSION} is {state}, not IN_BETA_TESTING — "
                                "not actually available to internal testers")

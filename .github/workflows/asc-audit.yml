@@ -65,7 +65,13 @@ jobs:
               print(f"== BUILDS for {a['attributes']['name']}: newest {len(builds)} ==")
               for b in builds:
                   at = b["attributes"]
+                  try:
+                      beta = get(f"/v1/builds/{b['id']}/buildBetaDetail")["data"]["attributes"]
+                      internal = beta.get("internalBuildState")
+                  except Exception:
+                      internal = "?"
                   print("  build", at["version"], "|", at["processingState"],
+                        "| internal", internal,
                         "| uploaded", (at.get("uploadedDate") or "")[:16],
                         "| expired", at.get("expired"))
               groups = get(f"/v1/betaGroups?filter[app]={a['id']}")["data"]
