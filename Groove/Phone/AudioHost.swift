@@ -83,7 +83,7 @@ final class LocalAudioHost: NSObject, AudioHost {
 
     private(set) var isArmed = false
     private(set) var isAlive = false
-    private var isDucked = false
+    private(set) var isDucked = false
 
     var currentInputName: String {
         AVAudioSession.sharedInstance().currentRoute.inputs.first?.portName ?? "None"
@@ -300,14 +300,18 @@ final class LocalAudioHost: NSObject, AudioHost {
         let window = Int(rate * Self.burstWindow)
         let preRoll = Int(rate * Self.burstPreRoll)
         let available = filled ? capacity : write
-        let count = min(window, available)
-        guard count > 32 else { ringLock.unlock(); return }
+        guard min(window, available) > 32 else { ringLock.unlock(); return }
 
-        // The strike happened `struckAgo` seconds ago (detect→send→here). The
-        // newest sample sits just before the write head, so the strike sits
-        // `struckAgo` further back. Reach to it, then add the pre-roll so the
-        // burst opens with the club arriving. Clamped to what the ring holds.
-        let strikeBack = min(Int(struckAgo * rate) + preRoll + count, available)
+        // The strike happened `struckAgo` seconds ago (detect lag + send +
+        // here). The newest sample sits just before the write head, so the
+        // strike sits `struckAgo` further back; the slice must OPEN `preRoll`
+        // before it and run `count` forward from there — the old arithmetic
+        // added `count` as well and ended the window at the strike instead
+        // of starting there, replaying the club arriving and not the crack.
+        // Clamped to what the ring holds.
+        let strikeBack = min(Int(struckAgo * rate) + preRoll, available)
+        let count = min(window, strikeBack)
+        guard count > 32 else { ringLock.unlock(); return }
         var slice = [Float](repeating: 0, count: count)
         var read = write - strikeBack
         while read < 0 { read += capacity }

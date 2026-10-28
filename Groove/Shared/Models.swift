@@ -364,7 +364,10 @@ struct SessionSummary {
     /// discipline; if it somehow mixes, the most common one wins so the
     /// thresholds and wording stay coherent.
     var discipline: Discipline {
-        let all = struckSwings.map(\.metrics.discipline)
+        // Every motion votes, not only strikes: a putting session whose
+        // strokes all fell under the floor must still be a putting session,
+        // or it gets the full swing's words and bands.
+        let all = swings.map(\.metrics.discipline)
         guard !all.isEmpty else { return .fullSwing }
         return Dictionary(grouping: all, by: { $0 })
             .max(by: { $0.value.count < $1.value.count })!.key
@@ -386,7 +389,7 @@ struct SessionSummary {
     /// Which disciplines actually appear here, in a stable order.
     var disciplinesPresent: [Discipline] {
         Discipline.allCases.filter { d in
-            struckSwings.contains { $0.metrics.discipline == d }
+            swings.contains { $0.metrics.discipline == d }
         }
     }
 

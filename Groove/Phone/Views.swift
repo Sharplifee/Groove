@@ -416,7 +416,8 @@ struct FormView: View {
                 repeatabilityCard
                 ChartFrame(title: "every \(lens.strokeWord), stacked on impact",
                            caption: "Each faint line is one \(lens.strokeWord), lined up on the moment you strike the ball. A tight band means you're repeating. Where it fans out is where it breaks down.") {
-                    EnsembleChart(traces: view.struckSwings.map(\.normalizedTrace))
+                    EnsembleChart(traces: view.struckSwings.map(\.normalizedTrace),
+                                  discipline: lens)
                 }
                 tempoCard
                 if view.rehearsals.count >= 3 || view.effortMix.count > 1 { practiceCard }
@@ -434,6 +435,13 @@ struct FormView: View {
                                 onDelete: { confirmDelete = $0 })
                 }
             }
+        }
+        // The lens defaults to the full swing, which is wrong for a player who
+        // only ever putts with it: the picker hides with one discipline and the
+        // tab said "nothing to compare" forever. Follow what actually exists.
+        .onAppear { if !available.contains(lens), let first = available.first { lens = first } }
+        .onChange(of: available) { _, now in
+            if !now.contains(lens), let first = now.first { lens = first }
         }
         .confirmationDialog("Remove this swing?",
                             isPresented: .init(get: { confirmDelete != nil },
@@ -608,7 +616,14 @@ struct SessionCard: View {
 /// The signature view — every swing overlaid, median and interquartile band on top.
 struct EnsembleChart: View {
     let traces: [[Double]]
+    /// Every trace is resampled to the same length, but each discipline keeps
+    /// a different share of it before impact (1.1/0.4 s for a full swing,
+    /// 0.55/0.25 s for a putt). The impact line has to be drawn where THIS
+    /// discipline put it, or the amber dot sits in the follow-through on a
+    /// putting chart.
+    var discipline: Discipline = .fullSwing
     @State private var drawn = false
+    private var impactShare: Double { discipline.tracePre / (discipline.tracePre + discipline.tracePost) }
 
     var body: some View {
         GeometryReader { geo in
@@ -657,8 +672,7 @@ struct EnsembleChart: View {
                     median.stroke(Color.trace.opacity(0.35), lineWidth: 6)
                     median.stroke(Color.trace, lineWidth: 2.2)
 
-                    let ix = geo.size.width * SwingAnalyzer.tracePre
-                        / (SwingAnalyzer.tracePre + SwingAnalyzer.tracePost)
+                    let ix = geo.size.width * impactShare
                     Path { p in
                         p.move(to: .init(x: ix, y: 0))
                         p.addLine(to: .init(x: ix, y: geo.size.height))
@@ -667,8 +681,7 @@ struct EnsembleChart: View {
 
                     // Impact flash: an amber dot where the median crosses the
                     // strike, the one moment every trace is aligned on.
-                    let iIdx = min(n - 1, Int(Double(n - 1) * SwingAnalyzer.tracePre
-                        / (SwingAnalyzer.tracePre + SwingAnalyzer.tracePost)))
+                    let iIdx = min(n - 1, Int(Double(n - 1) * impactShare))
                     Circle().fill(Color.amber)
                         .frame(width: 9, height: 9)
                         .shadow(color: Color.amber.opacity(0.7), radius: 5)
@@ -774,7 +787,8 @@ struct SetupView: View {
     private var routineCard: some View {
         Card("your pre-shot routine") {
             Row("taught", c.config.hasCalibrated ? "Yes" : "Not yet",
-                tint: c.config.hasCalibrated ? .turf : .alert)
+                tint: c.config.hasCalibrated ? .turf
+                      : (c.config.duckMode == .routineOnly ? .alert : .muted))
 
             if let r = c.calibrationResult {
                 SeparationBar(real: r.meanRealConfidence,
@@ -919,7 +933,8 @@ struct PairedDeviceView: View {
                         ChartFrame(title: "every swing, stacked on impact",
                                    caption: "A tight band means you're repeating.",
                                    height: 260) {
-                            EnsembleChart(traces: c.summary.struckSwings.map(\.normalizedTrace))
+                            EnsembleChart(traces: c.summary.struckSwings.map(\.normalizedTrace),
+                                          discipline: c.summary.discipline)
                         }
                     }
                 } else {

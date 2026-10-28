@@ -248,6 +248,9 @@ final class PhoneController: NSObject, ObservableObject {
     /// Seconds since the watch stamped the event currently being handled.
     /// The burst uses it to reach back to the true strike in the ring buffer.
     private var sinceEventSent: TimeInterval = 0
+    /// Detection lag the watch reported with the impact event: the engine
+    /// confirms a strike a few frames after it happened.
+    private var pendingImpactLag: TimeInterval = 0
 
     private func handle(event: String, confidence: Double) {
         if capture != nil {
@@ -256,6 +259,9 @@ final class PhoneController: NSObject, ObservableObject {
         }
         switch event {
         case "arm":
+            // In every-swing mode this is "settled over the ball"; in routine
+            // mode it is the model recognising the setup. Same word on screen
+            // either way — the player sees it as "it's ready".
             liveState = "set"
             // Open the record session early so takeaway only has to raise a fader.
             disarmWork?.cancel()
@@ -275,7 +281,7 @@ final class PhoneController: NSObject, ObservableObject {
             // ago, plus the fixed detect→send hop. Everything the player
             // already heard through the earbud seal; this is the amplified
             // copy on top of ducked media.
-            audio.fireImpactBurst(struckAgo: sinceEventSent)
+            audio.fireImpactBurst(struckAgo: sinceEventSent + pendingImpactLag)
             audio.restore(afterTail: config.tailSeconds)
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(config.tailSeconds))
@@ -291,6 +297,14 @@ final class PhoneController: NSObject, ObservableObject {
             liveState = "struck"
             pendingPelvisLead = pelvisPeakToImpactMs()
             pendingPelvisAt = Date()
+            // A strike that didn't duck (first ball under the gate, putting,
+            // ducking off) still had the mic opened by the arm event. Close it
+            // now rather than holding the record tier open until the next
+            // ducked swing's tail — the orange dot would sit on screen through
+            // the whole walk to the next ball.
+            if audio.isArmed, !audio.isDucked { scheduleDisarm(after: 0.6) }
+        case "motion":
+            liveState = "swinging"
 
         case "restore":
             liveState = "watching"
@@ -575,7 +589,11 @@ extension PhoneController: WCSessionDelegate {
                 self.mirrorSessionStart()
             }
             if event == "sessionStart" { self.mirrorSessionStart(capturing: capturing) }
-            else { self.sinceEventSent = eventAge; self.handle(event: event, confidence: confidence) }
+            else {
+                self.sinceEventSent = eventAge
+                self.pendingImpactLag = payload["lag"] as? TimeInterval ?? 0
+                self.handle(event: event, confidence: confidence)
+            }
         }
     }
 }

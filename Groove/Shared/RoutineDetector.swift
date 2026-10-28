@@ -150,16 +150,22 @@ protocol RoutineDetectorDelegate: AnyObject {
     /// This is what the audio burst must key off — waiting for completion adds
     /// the whole trace-tail plus transfer latency, so the burst slices turf
     /// instead of the strike. Default no-op so existing delegates need not care.
-    func detectorDidDetectImpact(wasArmed: Bool)
+    func detectorDidDetectImpact(wasArmed: Bool, lag: TimeInterval)
     /// A motion ran and was not a swing of any kind — walking, raking a ball
     /// over, teeing up. Counted so the face can say "ignored 14 movements";
     /// never logged. `wasArmed` carries the same restore duty as above.
     func detectorDidDiscardMotion(reason: String, wasArmed: Bool)
+    /// Any motion has begun, ducked or not — the face's "swinging" state.
+    func detectorDidStartMotion(fromAddress: Bool)
+    /// Recovery after a motion has ended; the face goes back to "watching".
+    func detectorDidRecover()
 }
 
 extension RoutineDetectorDelegate {
-    func detectorDidDetectImpact(wasArmed: Bool) {}
+    func detectorDidDetectImpact(wasArmed: Bool, lag: TimeInterval) {}
     func detectorDidDiscardMotion(reason: String, wasArmed: Bool) {}
+    func detectorDidStartMotion(fromAddress: Bool) {}
+    func detectorDidRecover() {}
 }
 
 /// # How a motion becomes a record
@@ -202,8 +208,12 @@ final class RoutineDetector {
     var config = Config.load()
 
     /// Replace the live template. Used by the replay tool to reproduce the
-    /// exact arming the wrist did in the field; not used in the app.
-    func installTemplate(_ t: RoutineTemplate) { template = t }
+    /// exact arming the wrist did in the field; not used in the app. From
+    /// then on the template is never persisted — a replay must not write
+    /// into the replaying machine's defaults, or the next replay of an older
+    /// capture (no template of its own) inherits it and arms differently.
+    func installTemplate(_ t: RoutineTemplate) { template = t; persistsTemplate = false }
+    private var persistsTemplate = true
 
     /// Rotation below which the wrist counts as still. One source of truth:
     /// the takeaway trigger floors at 1.2× this, and metrics time the backswing
@@ -226,6 +236,7 @@ final class RoutineDetector {
             // full-swing setup are different shapes and must not be averaged
             // into one arming model. Persist the outgoing one, load the
             // incoming one.
+            guard persistsTemplate else { return }
             template.save(for: oldValue)
             template = RoutineTemplate.load(for: discipline)
         }
@@ -242,12 +253,14 @@ final class RoutineDetector {
     private let bufferCapacity = Int(SwingAnalyzer.fs * 12)
     /// Consecutive frames of stillness ending at the newest frame.
     private var stillRun = 0
-    /// Length of the most recent completed stillness run, and how many
-    /// frames ago it ended — the takeaway trigger fires several frames into a
-    /// motion, so "was the player settled before this" has to be read from
-    /// the run that just ended, not from the current one.
-    private var lastStillRun = 0
-    private var framesSinceStill = 0
+    /// Still/moving history for the last 2 s, one bit per frame, so "was the
+    /// player settled before this motion" reads over a window rather than
+    /// from the run that happened to end last. A forward press or a last
+    /// look at the target breaks stillness for a few frames right before the
+    /// takeaway — the commonest real pre-shot pattern — and must not turn a
+    /// swing from address into one "on the walk".
+    private var stillHistory: [Bool] = []
+    private let stillWindow = 200
 
     // MARK: Arming (audio only)
 
@@ -286,10 +299,19 @@ final class RoutineDetector {
         var restoredEarly = false
         /// Duck wanted at takeaway, decided a quarter-second in (see below).
         var duckPending = false
-        /// Rotation lobe count above 55% of peak, kept live so a walk can be
-        /// recognised (and its duck released) before the episode closes.
-        var lobes = 0
+        /// Frame time the takeaway trigger fired (eight frames after startT).
+        var triggerT: TimeInterval = 0
+        /// Rotation lobes, kept live so a walk can be recognised (and its
+        /// duck released) before the episode closes. Each lobe's own peak is
+        /// recorded; `lobes` counts those that stand at least 55% of the
+        /// motion's peak so far. A forward press that merged into the
+        /// episode (1–2 rad/s against a 20 rad/s swing) drops out the moment
+        /// the real swing arrives; a walk's strides are all alike and all
+        /// count; a backswing's lobe (~40% of the downswing) never counts, so
+        /// a swing is one lobe.
+        var lobePeaks: [Double] = []
         var inLobe = false
+        var lobes: Int { lobePeaks.filter { $0 >= peakRot * 0.55 }.count }
     }
     private var episode: Episode?
     private var recoverStart: TimeInterval?
@@ -305,8 +327,8 @@ final class RoutineDetector {
         settleStart = nil; armedAt = nil; armConfidence = 0
         isArmed = false; armedByRoutine = false
         samplesSinceSignature = 0
-        episode = nil; recoverStart = nil; awaitingDrop = false
-        stillRun = 0; lastStillRun = 0; framesSinceStill = 0
+        episode = nil; recoverStart = nil; awaitingDrop = false; rearmNeedsMotion = false
+        stillRun = 0; stillHistory.removeAll(keepingCapacity: true)
         sessionOpened = false
         discardedCount = 0
     }
@@ -320,7 +342,11 @@ final class RoutineDetector {
         case .everySwing: break
         }
         guard discipline.ducksAudio else { return false }
-        if config.gateUntilFirstImpact && !sessionOpened { return false }
+        // The first-ball gate exists because an untrained routine isn't
+        // consistent during warm-up. Every-swing mode has no routine to be
+        // inconsistent; gating it just silenced the first real shot of every
+        // session in the default mode.
+        if config.duckMode == .routineOnly, config.gateUntilFirstImpact, !sessionOpened { return false }
         return true
     }
 
@@ -349,14 +375,13 @@ final class RoutineDetector {
 
         let still = frame.rotationMagnitude < Self.stillnessRotation
             && frame.accelMagnitude < Self.stillnessAccel
-        if still {
-            stillRun += 1; framesSinceStill = 0
-        } else {
-            if stillRun > 0 { lastStillRun = stillRun }
-            stillRun = 0; framesSinceStill += 1
-        }
-        let settledBefore = framesSinceStill <= 40
-            && Double(lastStillRun) / SwingAnalyzer.fs >= Self.addressSettle
+        stillRun = still ? stillRun + 1 : 0
+        stillHistory.append(still)
+        if stillHistory.count > stillWindow { stillHistory.removeFirst(stillHistory.count - stillWindow) }
+        // Settled: at least 0.6 s of stillness inside the last 1.5 s. Read
+        // every frame (cheap: 150 bools) so it is current at the trigger.
+        let recent = stillHistory.suffix(150)
+        let settledBefore = Double(recent.filter { $0 }.count) / SwingAnalyzer.fs >= Self.addressSettle
 
         if episode != nil {
             advanceEpisode(frame)
@@ -387,6 +412,7 @@ final class RoutineDetector {
     private func evaluateSetup(_ f: MotionFrame, still: Bool) {
         guard still, stillRun > 20 else {
             if state == .settling { state = .watching; settleStart = nil }
+            rearmNeedsMotion = false
             return
         }
         if state == .watching { state = .settling; settleStart = f.t; samplesSinceSignature = 0 }
@@ -402,7 +428,10 @@ final class RoutineDetector {
         case .everySwing:
             // Being over the ball IS the signal. Open the mic the moment the
             // player has settled, so the ring is live before the takeaway.
-            // No routine model involved, no haptic.
+            // No routine model involved, no haptic. Not when the duck can't
+            // fire anyway (putting, ducking off): that opened the phone's mic
+            // for every putt on the green for nothing.
+            guard duckPermitted, !rearmNeedsMotion else { return }
             if settledFor >= Self.addressSettle, !isArmed { arm(confidence: 1, routine: false, at: f.t) }
             return
         case .routineOnly:
@@ -431,8 +460,14 @@ final class RoutineDetector {
         delegate?.detectorDidArm(confidence: confidence, routine: routine)
     }
 
+    /// Set when an arm times out while the player is still standing still:
+    /// re-arming on the same stillness would thrash the phone's audio session
+    /// every 30 s for as long as they stood there. They have to move first.
+    private var rearmNeedsMotion = false
+
     private func evaluateArmed(_ f: MotionFrame) {
         guard let a = armedAt, f.t - a > armTimeout else { return }
+        rearmNeedsMotion = stillRun > 20
         disarm()
     }
 
@@ -454,6 +489,7 @@ final class RoutineDetector {
         state = .watching
         settleStart = nil
         recoverStart = nil
+        delegate?.detectorDidRecover()
     }
 
     // MARK: Episode
@@ -475,16 +511,20 @@ final class RoutineDetector {
         case .off:         engage = false
         }
         e.duckPending = engage
+        e.triggerT = t
         episode = e
         state = .swinging
         onTrace?(t, "takeaway (from address=\(settledBefore), armed=\(isArmed), duck pending=\(engage))")
+        delegate?.detectorDidStartMotion(fromAddress: settledBefore)
     }
 
-    /// How far into a motion the duck decision waits. A waggle is a lift
-    /// that is already falling back by here; a backswing is still rising.
-    /// Scaled to the discipline so a short chip backswing isn't past its own
-    /// peak before it is judged. Leaves 600 ms+ before a full-swing impact.
-    private var duckDecisionDelay: TimeInterval { 0.25 * max(0.6, discipline.tracePre / 1.1) }
+    /// How far past the TRIGGER frame the duck decision waits (the episode
+    /// starts eight frames earlier, so measuring from there under-waited by
+    /// 80 ms and the short game was judged ~100 ms in, while a chip waggle is
+    /// still rising). A waggle is a lift that is already falling back by a
+    /// quarter-second; a backswing of any discipline is still building.
+    /// Leaves 600 ms+ before a full-swing impact.
+    private var duckDecisionDelay: TimeInterval { 0.25 }
 
     /// Fires the duck if, a quarter-second in, the wrist is still going back
     /// — rotation holding or rising against 100 ms earlier. A waggle has
@@ -512,7 +552,7 @@ final class RoutineDetector {
         let rot = f.rotationMagnitude
         let elapsed = f.t - e.startT
 
-        if e.duckPending, elapsed >= duckDecisionDelay { decideDuck(&e, at: i, now: f.t) }
+        if e.duckPending, f.t - e.triggerT >= duckDecisionDelay { decideDuck(&e, at: i, now: f.t) }
 
         if rot > e.peakRot { e.peakRot = rot; e.peakRotIdx = i }
         e.peakAccel = max(e.peakAccel, f.accelMagnitude)
@@ -520,9 +560,12 @@ final class RoutineDetector {
 
         // Lobe counting: a swing has one dominant speed lobe; a walk has one
         // per stride. Tracked live so a walk can release the duck early.
-        let lobeLine = e.peakRot * 0.55
-        if rot >= lobeLine { if !e.inLobe { e.inLobe = true; e.lobes += 1 } }
-        else if rot < e.peakRot * 0.3 { e.inLobe = false }
+        if rot >= max(e.peakRot * 0.55, discipline.takeawayThreshold) {
+            if !e.inLobe { e.inLobe = true; e.lobePeaks.append(rot) }
+            else { e.lobePeaks[e.lobePeaks.count - 1] = max(e.lobePeaks[e.lobePeaks.count - 1], rot) }
+        } else if rot < e.peakRot * 0.3 {
+            e.inLobe = false
+        }
 
         // Impact search — incremental, one new jerk per frame.
         if e.impact == nil, i >= e.searchStartIdx, i > 0 {
@@ -532,9 +575,16 @@ final class RoutineDetector {
                 e.jerkBaseline = e.jerks.sorted()[e.jerks.count / 2]
                 e.sinceBaseline = 0
             }
+            // The floor scales with the swing's peak, but the running peak
+            // during the backswing is a backswing number: at 0.35 s in it put
+            // the floor at its minimum and a wrist-cock step became a strike
+            // confirmed mid-backswing, burst and all. A strike cannot precede
+            // swing speed, so until the motion has reached it the floor is
+            // judged at the swing-speed floor and no candidate is taken.
+            let atSwingSpeed = e.peakRot >= discipline.swingPeakFloor
             let threshold = SwingAnalyzer.effectiveImpactThreshold(
                 base: discipline.wristImpactThreshold,
-                peakRotation: e.peakRot,
+                peakRotation: max(e.peakRot, discipline.swingPeakFloor),
                 referenceRotation: discipline.referenceRotation)
             // Two floors, both must clear. The global one (median texture of
             // the whole motion, ×5, bounded by the discipline threshold) is
@@ -557,7 +607,7 @@ final class RoutineDetector {
             let saturated = abs(f.accel.x) > 15.6 || abs(f.accel.y) > 15.6 || abs(f.accel.z) > 15.6
             // Nothing with three speed lobes behind it is a swing, so nothing
             // in it is a ball — the end of a walk gets no strike candidate.
-            if (jerk > floor || saturated) && atSpeed && e.lobes <= 2 {
+            if (jerk > floor || saturated) && atSpeed && atSwingSpeed && e.lobes <= 2 {
                 let span = jerk - prev
                 let fraction = span > 0 ? max(0, min(1, (floor - prev) / span)) : 1
                 if let c = e.candidate {
@@ -588,7 +638,8 @@ final class RoutineDetector {
                                                           threshold: threshold, clipped: e.clipped)
                 onTrace?(f.t, String(format: "impact found (floor %.0f, base %.0f, jerk %.0f, peak rot %.1f, score %.2f)",
                                      floor, e.jerkBaseline, c.jerk, e.peakRot, e.impactScore))
-                delegate?.detectorDidDetectImpact(wasArmed: e.audioEngaged)
+                delegate?.detectorDidDetectImpact(wasArmed: e.audioEngaged && !e.restoredEarly,
+                                                  lag: f.t - buffer[c.idx].t)
             }
         }
 
@@ -645,7 +696,18 @@ final class RoutineDetector {
         episode = nil
         awaitingDrop = true
         let now = buffer.last?.t ?? 0
-        let lastMovingIdx = max(e.startIdx, buffer.count - 1 - (forced ? 0 : e.quietRun))
+        // Where the motion actually ended. For a strike the quiet line was
+        // raised to half the peak so the walk-off starts a new motion, which
+        // means quietRun began counting during the follow-through — so walk
+        // back from the newest frame to the last one still above the normal
+        // end line instead, and "duration" means the same thing for every
+        // kind: takeaway to the end of the follow-through.
+        var lastMovingIdx = max(e.startIdx, buffer.count - 1 - (forced ? 0 : e.quietRun))
+        if e.impact != nil, !forced {
+            var k = buffer.count - 1
+            while k > e.startIdx, buffer[k].rotationMagnitude < discipline.episodeEndThreshold { k -= 1 }
+            lastMovingIdx = max(lastMovingIdx, k)
+        }
         let duration = buffer[lastMovingIdx].t - e.startT
         let audio = e.audioEngaged && !e.restoredEarly
 
@@ -661,11 +723,16 @@ final class RoutineDetector {
         recoverStart = nil
         settleStart = nil
 
+        // The phone opened its mic at the arm event; if this motion never
+        // engaged the audio (putting, the gate, a discard) nothing downstream
+        // would close it, and the record tier sat open until the next ducked
+        // swing's tail. Tell it to stand down.
+        if wasArmed, !audio { delegate?.detectorDidDisarm() }
+
         switch verdict {
         case .discarded:
             discardedCount += 1
             delegate?.detectorDidDiscardMotion(reason: "not a swing", wasArmed: audio)
-            if wasArmed { delegate?.detectorDidDisarm() }
             return
         case .strike, .practice, .waggle:
             break
@@ -683,7 +750,7 @@ final class RoutineDetector {
         // practice swing taken on the walk is not a rehearsal of anything.
         if kind != .waggle, e.startedFromAddress {
             template.learn(sig, struck: kind == .strike)
-            template.save(for: discipline)
+            if persistsTemplate { template.save(for: discipline) }
         }
         if kind == .strike { sessionOpened = true }
 

@@ -1147,5 +1147,133 @@ do {
           cc.duckMode == .everySwing)
 }
 
+
+// MARK: - Audit sweep 2026-10-28
+
+final class SweepRecorder: RoutineDetectorDelegate {
+    var swings: [Swing] = []
+    var arms = 0, takeaways = 0, impacts = 0, disarms = 0, recovers = 0, starts = 0
+    var impactLags: [TimeInterval] = []
+    func detectorDidArm(confidence: Double, routine: Bool) { arms += 1 }
+    func detectorDidDisarm() { disarms += 1 }
+    func detectorDidFireTakeaway(confidence: Double) { takeaways += 1 }
+    func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) { swings.append(swing) }
+    func detectorDidDetectImpact(wasArmed: Bool, lag: TimeInterval) { impacts += 1; impactLags.append(lag) }
+    func detectorDidRecover() { recovers += 1 }
+    func detectorDidStartMotion(fromAddress: Bool) { starts += 1 }
+}
+
+// A forward press right before the takeaway — the commonest real pre-shot
+// pattern — must not turn a swing from address into one "on the walk".
+do {
+    let det = RoutineDetector(); let rec = SweepRecorder()
+    var cfg = Config(); cfg.duckMode = .everySwing
+    det.config = cfg; det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var f = Range.still(2.0, from: 0, seed: 21)
+    // Forward press: 0.15 s at 0.8 rad/s, 0.15 s re-still, then the swing.
+    f += stream([(0.15, 0.8, 0.05), (0.15, 0.1, 0.02)], from: f.last!.t + 0.01)
+    f += Range.strike(effort: 0.85, from: f.last!.t + 0.01, seed: 22)
+    f += Range.still(1.5, from: f.last!.t + 0.01, seed: 23)
+    f.forEach(det.ingest)
+    check("sweep: a forward press before the swing keeps it a swing from address",
+          rec.swings.count == 1 && rec.swings[0].struck && rec.swings[0].metrics.startedFromAddress == true,
+          "\(rec.swings.map { ($0.resolvedKind, $0.metrics.startedFromAddress ?? false) })")
+    check("sweep: and the music still drops for it", rec.takeaways == 1)
+    check("sweep: the first ball of a session ducks in every-swing mode",
+          rec.takeaways == 1 && rec.impacts == 1)
+    check("sweep: the impact event carries a small positive detection lag",
+          rec.impactLags.allSatisfy { $0 > 0.05 && $0 < 0.2 }, "\(rec.impactLags)")
+    check("sweep: recovery hands the face back to watching", rec.recovers >= 1)
+    check("sweep: every motion start is reported", rec.starts == 1)
+}
+
+// A wrist-cock step early in the backswing — a 0.4 g step at low rotation
+// with the floor at its minimum — must not be confirmed as a strike, and the
+// real strike that follows must be.
+do {
+    let det = RoutineDetector(); let rec = SweepRecorder()
+    var cfg = Config(); cfg.duckMode = .everySwing
+    det.config = cfg; det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var f = Range.still(1.5, from: 0, seed: 31)
+    // Slow early backswing at 2.5 rad/s with a sharp 0.4 g set, then the swing.
+    var t = f.last!.t + 0.01
+    for k in 0..<40 {
+        let step = k == 30 ? 0.45 : 0.0
+        f.append(mf(t, rot: 2.5, accel: 0.12 + step)); t += 0.01
+    }
+    f += swingShape(peak: 19, back: 0.5, strike: 2.6, texture: 0.02, from: t, seed: 32)
+    f += Range.still(1.5, from: f.last!.t + 0.01, seed: 33)
+    f.forEach(det.ingest)
+    check("sweep: a wrist-cock step before swing speed is not a strike",
+          rec.swings.count == 1 && rec.swings[0].struck && rec.swings[0].metrics.backswing > 0.5,
+          "\(rec.swings.map { ($0.resolvedKind, $0.metrics.backswing) })")
+    check("sweep: only one impact event fired, at the real strike", rec.impacts == 1)
+}
+
+// Putting never opens the phone's microphone: nothing to duck, nothing to arm.
+do {
+    let det = RoutineDetector(); let rec = SweepRecorder()
+    var cfg = Config(); cfg.duckMode = .everySwing
+    det.config = cfg; det.delegate = rec; det.discipline = .putting; det.reset()
+    var f = Range.still(2.0, from: 0, seed: 41)
+    f += swingShape(peak: 2.4, back: 0.5, top: 0.08, down: 0.25, finish: 0.4,
+                    strike: 0.25, texture: 0.004, from: f.last!.t + 0.01, seed: 42)
+    f += Range.still(2.0, from: f.last!.t + 0.01, seed: 43)
+    f.forEach(det.ingest)
+    check("sweep: putting never arms the phone's mic", rec.arms == 0 && rec.takeaways == 0)
+    check("sweep: the putt is still recorded", rec.swings.first?.struck == true)
+}
+
+// Ducking off: nothing arms, everything records.
+do {
+    let det = RoutineDetector(); let rec = SweepRecorder()
+    var cfg = Config(); cfg.duckMode = .off
+    det.config = cfg; det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var f = Range.still(2.0, from: 0, seed: 51)
+    f += Range.strike(effort: 0.9, from: f.last!.t + 0.01, seed: 52)
+    f += Range.still(2.0, from: f.last!.t + 0.01, seed: 53)
+    f.forEach(det.ingest)
+    check("sweep: ducking off arms nothing and records everything",
+          rec.arms == 0 && rec.takeaways == 0 && rec.swings.count == 1 && rec.swings[0].struck)
+}
+
+// Standing still for a minute: the arm times out once and does not re-arm
+// on the same stillness — the phone's audio session must not be thrashed
+// every 30 s for a player who is just standing there.
+do {
+    let det = RoutineDetector(); let rec = SweepRecorder()
+    var cfg = Config(); cfg.duckMode = .everySwing
+    det.config = cfg; det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    Range.still(70, from: 0, seed: 61).forEach(det.ingest)
+    check("sweep: standing still re-arms at most once per stillness",
+          rec.arms == 1 && rec.disarms == 1, "arms \(rec.arms) disarms \(rec.disarms)")
+}
+
+// Strike duration runs to the end of the follow-through, like practice swings.
+do {
+    let det = RoutineDetector(); let rec = SweepRecorder()
+    var cfg = Config(); cfg.duckMode = .everySwing
+    det.config = cfg; det.delegate = rec; det.discipline = .fullSwing; det.reset()
+    var f = Range.still(1.5, from: 0, seed: 71)
+    f += Range.strike(effort: 0.8, from: f.last!.t + 0.01, seed: 72)
+    f += Range.still(1.0, from: f.last!.t + 0.01, seed: 73)
+    f += Range.practice(effort: 0.8, from: f.last!.t + 0.01, seed: 74)
+    f += Range.still(1.5, from: f.last!.t + 0.01, seed: 75)
+    f.forEach(det.ingest)
+    let d = rec.swings.map { $0.metrics.duration ?? 0 }
+    check("sweep: a strike and a practice swing of the same shape report the same duration",
+          d.count == 2 && abs(d[0] - d[1]) < 0.15, "\(d)")
+}
+
+// Summary discipline follows every motion, not only strikes.
+do {
+    var m = SwingMetrics(); m.discipline = .putting; m.tempoRatio = 2.0
+    let s = SessionSummary(swings: [Swing(struck: false, kind: .practice,
+        routine: RoutineSignature(plateauCount: 1, meanDwell: 0.3, totalSetupDuration: 0.3, transitionSharpness: 0.02, dwellVariance: 0),
+        armConfidence: 0.3, metrics: m, normalizedTrace: [])])
+    check("sweep: a session of unstruck putts is still a putting session",
+          s.discipline == .putting && s.disciplinesPresent == [.putting])
+}
+
 print(failures == 0 ? "ALL CHECKS PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

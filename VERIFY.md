@@ -110,17 +110,29 @@ once on a real range; the defaults are reasoned, not measured.
 - [ ] Contrast holds in both themes (token values are AA-checked in Theme.swift,
       but check the composed screens)
 
-## 6.5 — the ten invariants
+## 6.5 — the invariants
 
-Verified by inspection in this commit; re-check after any merge.
+Re-check after any merge. The harness (`Tests/run-checks.sh`, 155 checks) pins
+every engine item below; the rest are by inspection.
 
-1. `wasArmedForThisSwing` — RoutineDetector.swift:103,119,209
-2. Config crosses via `ConfigSync.push` — PhoneController.swift:16,389
-3. `takeawayIdx = max(0, t - removed)` — RoutineDetector.swift:146
-4. Confidence computed before `template.learn` — RoutineDetector.swift:250,253
-5. Thresholds wrist 180 / pelvis 35 — SwingAnalyzer.swift:13,14
-6. Pelvis snapshot at the impact event — PhoneController.swift:238
-7. `setActive(false)` exactly once, in `endSession()` — AudioHost.swift:158
-8. Watch spools until acked — WatchController.swift:167
-9. `persist()` guards on example mode — PhoneController.swift:344
-10. `WKBackgroundModes` on the watch — Support/GrooveWatch-Info.plist:33
+1. Capture is independent of arming — every episode is classified and logged
+   whether or not audio was engaged (`RoutineDetector.close`)
+2. Config crosses via `ConfigSync.push`, including `duckMode`
+3. Rolling-buffer indices shift with every trim (`ingest`, episode fields)
+4. Confidence is computed before `template.learn`, and only swings from a
+   settled address teach the template
+5. Thresholds per discipline (`Discipline.wristImpactThreshold` 110 / 40 / 18 / 9;
+   pelvis 22 / 12 / 7 / 4) scaled by each swing's peak, never below the
+   swing-speed floor
+6. Pelvis snapshot at the "struck" event — `PhoneController.handle`
+7. `setActive(false)` exactly once, in `LocalAudioHost.endSession()`
+8. Watch spools in memory, persists on change, drains on either ack channel
+9. `persist()` guards on example mode
+10. `WKBackgroundModes` on the watch — Support/GrooveWatch-Info.plist
+11. A strike is a spike: above the scaled floor, 3× the local texture, half
+    the jump given back within three samples, only once the motion has
+    reached swing speed, never in a motion with three stride lobes
+12. Transient events (arm/disarm/takeaway/impact/restore/motion) are never
+    queued durably; `sentAt` stamps every event
+13. Frame time is `CMDeviceMotion.timestamp`, not delivery wall-clock
+14. The replay tool never persists a template into the host's defaults

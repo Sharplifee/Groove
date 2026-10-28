@@ -184,6 +184,14 @@ difference as inconsistency.
   until the wrist has dropped under the trigger once.
 - **Only swing-shaped motions are logged, and only swings from a settled
   address teach the routine model.** Everything else is discarded and counted.
+- **No strike candidate until the motion has reached swing speed.** The floor
+  scales with the swing's peak; judged on a backswing peak it sits at its
+  minimum and a wrist-cock step passes.
+- **Transient events are never queued durably.** Arm, duck, restore and
+  impact mean nothing a minute later; only session start/end, struck and the
+  swings themselves ride `transferUserInfo`.
+- **Frame time is the sensor clock** (`CMDeviceMotion.timestamp`), never
+  `Date()` at delivery.
 - **Plateau segmentation runs at 10 Hz, not 100 Hz.** It's expensive and a hold
   lasts a second.
 - **The phone app must be running** for `sendMessage` to land. Both UIs say so.

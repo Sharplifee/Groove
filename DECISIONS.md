@@ -707,3 +707,55 @@ through the real engine; all of it would have been logged as practice swings
 or strikes before. Still unverified on hardware: every number above was set
 against synthetic motion and the pitching export. The replay tool and the
 capture mode are unchanged and are how the next range session settles them.
+
+## 47. Full sweep after the rebuild — fourteen gaps, all closed
+
+A second pass over every file, with an independent read of the engine, found
+fourteen things the rebuild had either introduced or never reached. Each is
+pinned in the harness (155 checks) where the engine is involved.
+
+**Engine.** The impact floor was scaled by the *running* peak, so 0.35 s into
+a backswing it sat at its minimum and a wrist-cock step passed as a strike —
+confirmed mid-backswing, burst and all. No candidate is taken now until the
+motion has reached swing speed. Stride counting had no margin: a forward press
+that merged into the episode counted as a lobe, and a third lobe discarded the
+swing and restored the audio just before impact; lobes are now judged by their
+own height against the motion's peak, so the press drops out when the swing
+arrives. "Settled before" read only the last stillness run, so a forward press
+or a last look at the target made a swing from address read as one on the
+walk — it reads 0.6 s of stillness within the last 1.5 s now. The duck
+decision was timed from eight frames before the trigger, which judged the
+short game ~100 ms in while a chip waggle is still rising; it is 250 ms past
+the trigger for every discipline. An early-restored motion that then found a
+strike still sent the impact event. Strike duration stopped at the ball while
+practice-swing duration ran to the finish. The first-ball gate silenced the
+first real shot of every session in the default every-swing mode; it only
+applies to routine mode now. Every-swing mode armed the phone's mic on every
+putt and never told the phone to stand down after a swing that didn't duck;
+arming now requires the duck to be possible, and any consumed arm without
+audio sends a disarm. Standing still re-armed every 30 s; it re-arms once per
+stillness.
+
+**Watch.** Frame time was delivery wall-clock, which CoreMotion bursts under
+load; it is the sensor's own clock. The impact event now carries the engine's
+detection lag and the phone adds it to the send age, and the burst arithmetic
+was ending the slice at the strike instead of opening 18 ms before it. The
+spool decoded and re-encoded the whole archive from UserDefaults three times
+per swing and three per ack on the main thread; it lives in memory now. The
+face never left "logging" after a swing in modes that don't arm; recovery
+reports back. Transient events (arm, duck, restore) were queued durably when
+the phone was asleep — dozens per session in every-swing mode — and are
+dropped instead. Header widths overflowed a 40 mm face; "WATCHING" is "READY".
+
+**Phone.** The Form tab's lens defaulted to the full swing and never moved, so
+a player who only putts saw "nothing to compare" forever. The ensemble's
+impact line used the full swing's window on every discipline. A session's
+discipline came from strikes alone, so a putting session whose strokes fell
+under the floor was a "full swing" session with the wrong words and bands. The
+replay tool wrote learned templates into the replaying machine's defaults.
+
+**Pipeline.** The release step minted a 30-minute App Store Connect token;
+Apple rejects any token more than 20 minutes from expiry, so every poll 401'd
+for the first ten minutes (build 58's log shows exactly that) and the step only
+succeeded because processing took longer. Tokens are minted per call now and
+the poll runs as long as processing takes.

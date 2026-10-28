@@ -62,6 +62,8 @@ final class WatchController: NSObject, ObservableObject {
     private var workout: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
     private var t0 = Date()
+    /// First CMDeviceMotion timestamp of the session; frames are relative to it.
+    private var motionT0: TimeInterval?
     private var sessionID = UUID()
 
     private let queue: OperationQueue = {
@@ -147,6 +149,7 @@ final class WatchController: NSObject, ObservableObject {
                 detector.reset()
             }
             t0 = Date()
+            motionT0 = nil
             sessionID = UUID()
             struckCount = 0
             rehearsalCount = 0
@@ -160,8 +163,12 @@ final class WatchController: NSObject, ObservableObject {
             motion.deviceMotionUpdateInterval = 1.0 / SwingAnalyzer.fs
             motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: queue) { [weak self] dm, _ in
                 guard let self, let dm else { return }
+                // The sensor's own monotonic clock, not delivery wall-clock:
+                // CoreMotion delivers in bursts under load, and metrics time
+                // the backswing and interpolate impact on these deltas.
+                if self.motionT0 == nil { self.motionT0 = dm.timestamp }
                 let frame = MotionFrame(
-                    t: Date().timeIntervalSince(self.t0),
+                    t: dm.timestamp - (self.motionT0 ?? dm.timestamp),
                     accel: SIMD3(dm.userAcceleration.x, dm.userAcceleration.y, dm.userAcceleration.z),
                     rotation: SIMD3(dm.rotationRate.x, dm.rotationRate.y, dm.rotationRate.z),
                     gravity: SIMD3(dm.gravity.x, dm.gravity.y, dm.gravity.z))
@@ -262,6 +269,14 @@ final class WatchController: NSObject, ObservableObject {
         unsentSwings = spool.count
     }
 
+    /// Events that only mean something this second. Arming, ducking and
+    /// restoring are useless a minute later — the phone drops anything over
+    /// 60 s old anyway — so queueing them durably just fills the system outbox
+    /// and slows every swing behind them. In every-swing mode the watch arms
+    /// on every settle, which made this an outbox of dozens per session with
+    /// the phone asleep.
+    private static let transientEvents: Set<String> = ["arm", "disarm", "takeaway", "impact", "restore", "motion"]
+
     private func send(_ payload: [String: Any]) {
         var payload = payload
         // Stamped so the phone can tell a live event from one that has been
@@ -270,11 +285,12 @@ final class WatchController: NSObject, ObservableObject {
         payload["sentAt"] = Date().timeIntervalSince1970
         let s = WCSession.default
         guard s.activationState == .activated else { return }
+        let transient = (payload["event"] as? String).map { Self.transientEvents.contains($0) } ?? false
         if s.isReachable {
             s.sendMessage(payload, replyHandler: nil) { _ in
-                s.transferUserInfo(payload)     // queue it if the live path fails
+                if !transient { s.transferUserInfo(payload) }   // queue it if the live path fails
             }
-        } else {
+        } else if !transient {
             s.transferUserInfo(payload)
         }
     }
@@ -319,6 +335,14 @@ extension WatchController: RoutineDetectorDelegate {
       }
     }
 
+    nonisolated func detectorDidStartMotion(fromAddress: Bool) {
+      Task { @MainActor in
+        state = .swinging
+        // Live board only; no audio consequence. Transient, never queued.
+        if fromAddress { send(["event": "motion"]) }
+      }
+    }
+
     nonisolated func detectorDidFireTakeaway(confidence: Double) {
       Task { @MainActor in
         state = .swinging
@@ -332,12 +356,17 @@ extension WatchController: RoutineDetectorDelegate {
       }
     }
 
-    nonisolated func detectorDidDetectImpact(wasArmed: Bool) {
+    nonisolated func detectorDidDetectImpact(wasArmed: Bool, lag: TimeInterval) {
       Task { @MainActor in
-        // The strike is happening NOW. The phone needs this immediately to
-        // slice the burst; the completed swing (with its trace) follows.
-        if wasArmed, discipline.ducksAudio { send(["event": "impact"]) }
+        // The strike happened `lag` seconds before this was confirmed (the
+        // lookahead the engine waits for). The phone adds that to the send
+        // age so the burst slices the strike, not the samples after it.
+        if wasArmed, discipline.ducksAudio { send(["event": "impact", "lag": lag]) }
       }
+    }
+
+    nonisolated func detectorDidRecover() {
+      Task { @MainActor in if state == .recovering { state = .watching } }
     }
 
     nonisolated func detectorDidCompleteSwing(_ swing: Swing, wasArmed: Bool) {
@@ -459,24 +488,36 @@ enum Haptic {
 
 /// Durable queue of swings not yet confirmed by the phone. Survives app relaunch,
 /// so a lost or delayed transfer never costs a rep.
+///
+/// Held in memory and written through. The old version decoded and re-encoded
+/// the whole spool from UserDefaults on every access — three passes per swing,
+/// three per ack, each swing carrying a 240-point trace — so a phone
+/// reconnecting against 200 spooled swings stalled the watch UI for seconds.
 final class SwingSpool {
     private let key = "groove.spool"
+    private var items: [Swing]
 
-    private var items: [Swing] {
-        get {
-            guard let d = UserDefaults.standard.data(forKey: key),
-                  let s = try? JSONDecoder().decode([Swing].self, from: d) else { return [] }
-            return s
+    init() {
+        if let d = UserDefaults.standard.data(forKey: key),
+           let s = try? JSONDecoder().decode([Swing].self, from: d) {
+            items = s
+        } else {
+            items = []
         }
-        set {
-            if let d = try? JSONEncoder().encode(newValue) {
-                UserDefaults.standard.set(d, forKey: key)
-            }
+    }
+
+    private func persist() {
+        if let d = try? JSONEncoder().encode(items) {
+            UserDefaults.standard.set(d, forKey: key)
         }
     }
 
     var count: Int { items.count }
     func pending() -> [Swing] { items }
-    func enqueue(_ swing: Swing) { items.append(swing) }
-    func remove(_ id: UUID) { items.removeAll { $0.id == id } }
+    func enqueue(_ swing: Swing) { items.append(swing); persist() }
+    func remove(_ id: UUID) {
+        let before = items.count
+        items.removeAll { $0.id == id }
+        if items.count != before { persist() }
+    }
 }

@@ -13,7 +13,7 @@ struct WatchRootView: View {
 
     private var label: String {
         switch c.state {
-        case .watching, .settling: return "WATCHING"
+        case .watching, .settling: return "READY"
         case .armed:               return "SET"
         case .swinging:            return "SWING"
         case .recovering:          return "…"
@@ -23,9 +23,9 @@ struct WatchRootView: View {
     private var sub: String {
         switch c.state {
         case .armed:      return "ready"
-        case .swinging:   return "music down"
+        case .swinging:   return "swinging"
         case .recovering: return "logging"
-        default:          return c.isRunning ? "music untouched" : "no session yet"
+        default:          return c.isRunning ? "watching" : "no session yet"
         }
     }
 
@@ -36,6 +36,7 @@ struct WatchRootView: View {
             // watch face has no vertical budget for a masthead.
             HStack(alignment: .firstTextBaseline) {
                 Text("GROOVE").font(.system(size: 13, weight: .heavy, design: .rounded))
+                    .lineLimit(1).minimumScaleFactor(0.7)
                 Spacer()
                 HStack(spacing: 4) {
                     if c.isRunning && c.capturingLive { Text("REC").font(.system(size: 9, weight: .heavy)).foregroundStyle(.red) }
@@ -43,6 +44,7 @@ struct WatchRootView: View {
                     Text(label)
                         .font(.system(size: 14, weight: .heavy, design: .rounded))
                         .foregroundStyle(accent)
+                        .lineLimit(1).minimumScaleFactor(0.7)
                         .contentTransition(.opacity)
                 }
             }
@@ -214,7 +216,7 @@ struct GrooveWatchApp: App {
 
 #Preview("Watching") { WatchPreview(state: .watching, running: true) }
 #Preview("Set") { WatchPreview(state: .armed, running: true) }
-#Preview("Swing — music down") { WatchPreview(state: .swinging, running: true) }
+#Preview("Swinging") { WatchPreview(state: .swinging, running: true) }
 #Preview("Idle — not started") { WatchPreview(state: .watching, running: false) }
 #Preview("Phone unreachable") { WatchPreview(state: .watching, running: true, phone: false) }
 
@@ -235,7 +237,7 @@ struct WatchPreview: View {
     }
     private var label: String {
         switch state {
-        case .watching, .settling: return "WATCHING"
+        case .watching, .settling: return "READY"
         case .armed: return "SET"
         case .swinging: return "SWING"
         case .recovering: return "…"
@@ -244,9 +246,9 @@ struct WatchPreview: View {
     private var sub: String {
         switch state {
         case .armed: return "ready"
-        case .swinging: return "music down"
+        case .swinging: return "swinging"
         case .recovering: return "logging"
-        default: return running ? "music untouched" : "no session yet"
+        default: return running ? "watching" : "no session yet"
         }
     }
 

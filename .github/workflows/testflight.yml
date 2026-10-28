@@ -172,13 +172,21 @@ jobs:
           import json, os, time, urllib.request, urllib.error, jwt
           kid, iss = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
           key = open(os.path.expanduser(f"~/private_keys/AuthKey_{kid}.p8")).read()
-          tok = jwt.encode({"iss": iss, "iat": int(time.time()), "exp": int(time.time())+1800,
-                            "aud": "appstoreconnect-v1"}, key, algorithm="ES256", headers={"kid": kid})
           BASE = "https://api.appstoreconnect.apple.com"
+          # Apple rejects any token whose expiry is more than 20 minutes out,
+          # so a 30-minute token 401s for its first ten minutes — which is why
+          # build 58's release step logged NOT_AUTHORIZED on every poll until
+          # the token aged into the window. Mint a short one per call instead;
+          # the poll loop can then run as long as processing takes.
+          def token():
+              now = int(time.time())
+              return jwt.encode({"iss": iss, "iat": now, "exp": now + 600,
+                                 "aud": "appstoreconnect-v1"}, key,
+                                algorithm="ES256", headers={"kid": kid})
           def call(m, p, b=None):
               data = json.dumps(b).encode() if b else None
               r = urllib.request.Request(BASE+p, data=data, method=m,
-                  headers={"Authorization":"Bearer "+tok, "Content-Type":"application/json"})
+                  headers={"Authorization":"Bearer "+token(), "Content-Type":"application/json"})
               try:
                   with urllib.request.urlopen(r) as resp:
                       raw = resp.read(); return json.loads(raw) if raw else None
@@ -187,7 +195,7 @@ jobs:
           from datetime import datetime, timezone
           APP, VERSION = "6801063220", os.environ.get("BUILD_NUMBER","")
           target = None
-          for _ in range(30):
+          for _ in range(50):
               builds = call("GET", f"/v1/builds?filter[app]={APP}&sort=-version&limit=5")
               for b in (builds or {}).get("data", []):
                   if b["attributes"]["version"] != VERSION: continue
